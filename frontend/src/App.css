@@ -24,9 +24,12 @@
 
 .app-header h1 {
   margin: 0;
-  font-family: 'Playfair Display', Georgia, serif;
-  font-weight: 800;
-  letter-spacing: 0.01em;
+  font-family: 'Cormorant Garamond', Georgia, serif;
+  font-size: clamp(2.25rem, 6.5vw, 3.4rem);
+  font-weight: 700;
+  line-height: 1.05;
+  letter-spacing: 0.02em;
+  text-wrap: balance;
   color: #ffffff;
 }
 
