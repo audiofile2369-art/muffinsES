@@ -497,7 +497,7 @@ function App() {
   return (
     <div className="app-shell">
       <header className="app-header">
-        <h1>Muffin Esate Sales</h1>
+        <h1>Muffin Manor Estate Sales</h1>
       </header>
 
       {errorMessage ? <div className="notice error">{errorMessage}</div> : null}
