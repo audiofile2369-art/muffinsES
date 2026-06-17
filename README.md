@@ -15,6 +15,7 @@ MuffinES is a responsive estate sale management app for Amanda to manage multipl
 - `backend/` - FastAPI app, SQLite models, initialization helpers, and tests
 - `frontend/` - Vite React app and UI
 - `data/` - runtime SQLite database and uploads directory, created automatically
+- `neon_db.txt` - local-only Neon connection string file for the backend (ignored by Git)
 
 ## Run the backend
 
@@ -22,6 +23,8 @@ MuffinES is a responsive estate sale management app for Amanda to manage multipl
 Set-Location C:\Users\saarm\Projects\MuffinES
 .\.venv\Scripts\python -m uvicorn backend.main:app --reload --host 127.0.0.1 --port 8000
 ```
+
+The backend now prefers the Neon connection string stored in `neon_db.txt`. If that file is missing, it falls back to local SQLite.
 
 ## Run the frontend
 
@@ -35,7 +38,7 @@ The frontend now binds to **`http://127.0.0.1:5173`** by default and proxies `/a
 ## Vercel deployment
 
 - `vercel.json` is configured so Vercel can build the Vite app from the repo root even though the frontend lives in `frontend/`.
-- When no `VITE_API_BASE_URL` is configured, the deployed frontend falls back to a **browser storage mode** so the app still works on Vercel without the local FastAPI server.
+- When no `VITE_API_BASE_URL` is configured, the deployed frontend falls back to a **browser storage mode** so the app still works on Vercel without the local backend.
 - To use a real hosted backend later, set `VITE_API_BASE_URL` in Vercel to the backend's `/api` base URL.
 
 ## Validation commands

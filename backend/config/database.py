@@ -20,16 +20,22 @@ class Database:
         settings = get_settings()
         settings.data_dir.mkdir(parents=True, exist_ok=True)
         settings.uploads_dir.mkdir(parents=True, exist_ok=True)
-        self.engine = create_engine(
-            f"sqlite:///{settings.database_path}",
-            connect_args={"check_same_thread": False},
-        )
+        engine_kwargs: dict[str, object] = {"pool_pre_ping": True}
+        if settings.database_url.startswith("sqlite"):
+            engine_kwargs["connect_args"] = {"check_same_thread": False}
+
+        self.engine = create_engine(settings.database_url, **engine_kwargs)
 
     def create_tables(self) -> None:
         """Create all declared database tables."""
 
         SQLModel.metadata.create_all(self.engine)
-        LOGGER.info("Database schema ensured at %s", get_settings().database_path)
+        settings = get_settings()
+        LOGGER.info(
+            "Database schema ensured using %s (%s)",
+            settings.database_source,
+            settings.database_url.split("@")[-1] if "@" in settings.database_url else settings.database_url,
+        )
 
     def get_session(self) -> Session:
         """Create a new SQLModel session."""

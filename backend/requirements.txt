@@ -1,5 +1,6 @@
 fastapi
 httpx
+psycopg[binary]
 pytest
 sqlmodel
 uvicorn[standard]
