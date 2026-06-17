@@ -31,7 +31,10 @@ def get_settings() -> Settings:
     """Return cached application settings."""
 
     project_root = Path(__file__).resolve().parents[2]
-    data_dir = project_root / "data"
+    # Serverless platforms (e.g. Vercel) ship a read-only bundle; only /tmp is
+    # writable. Put any runtime-writable paths there when running on Vercel.
+    writable_root = Path("/tmp/muffines") if os.getenv("VERCEL") else project_root
+    data_dir = writable_root / "data"
     uploads_dir = data_dir / "uploads"
     neon_db_path = project_root / "neon_db.txt"
     openai_api_key_path = project_root / "open api.txt"

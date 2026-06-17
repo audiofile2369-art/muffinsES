@@ -18,8 +18,13 @@ class Database:
         """Initialize the engine using configured filesystem paths."""
 
         settings = get_settings()
-        settings.data_dir.mkdir(parents=True, exist_ok=True)
-        settings.uploads_dir.mkdir(parents=True, exist_ok=True)
+        # Tolerate read-only filesystems (e.g. Vercel) so importing this module
+        # never crashes the serverless function at cold start.
+        try:
+            settings.data_dir.mkdir(parents=True, exist_ok=True)
+            settings.uploads_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as error:
+            LOGGER.warning("Could not create local data directories: %s", error)
         engine_kwargs: dict[str, object] = {"pool_pre_ping": True}
         if settings.database_url.startswith("sqlite"):
             engine_kwargs["connect_args"] = {"check_same_thread": False}
