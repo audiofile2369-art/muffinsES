@@ -6,6 +6,7 @@ import {
   createItem,
   createSale,
   createTask,
+  getDataSourceMode,
   getDashboard,
   getWorkspace,
   updateCategory,
@@ -204,6 +205,7 @@ function App() {
     status: '',
     pricing: 'all',
   })
+  const dataSourceMode = getDataSourceMode()
 
   useEffect(() => {
     async function loadInitialData(): Promise<void> {
@@ -982,6 +984,11 @@ function App() {
             Amanda can manage every sale, item, category, task, and revenue snapshot from one
             clean workspace.
           </p>
+          {dataSourceMode === 'browser-demo' ? (
+            <div className="mode-banner">
+              Running in browser storage mode for deployment preview. Changes save in this browser.
+            </div>
+          ) : null}
         </div>
         <div className="hero-stats">
           {renderStatCard('Active sales', String(dashboardTotals.salesCount), 'purple')}

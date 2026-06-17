@@ -28,6 +28,16 @@
   color: rgba(248, 250, 252, 0.82);
 }
 
+.mode-banner {
+  margin-top: 16px;
+  display: inline-flex;
+  padding: 10px 14px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+  color: #f8fafc;
+  font-size: 14px;
+}
+
 .eyebrow {
   display: inline-block;
   margin-bottom: 4px;

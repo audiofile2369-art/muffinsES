@@ -32,6 +32,12 @@ npm run dev
 
 The frontend now binds to **`http://127.0.0.1:5173`** by default and proxies `/api` requests to the backend at `http://127.0.0.1:8000` during local development.
 
+## Vercel deployment
+
+- `vercel.json` is configured so Vercel can build the Vite app from the repo root even though the frontend lives in `frontend/`.
+- When no `VITE_API_BASE_URL` is configured, the deployed frontend falls back to a **browser storage demo mode** so the app still works on Vercel without the local FastAPI server.
+- To use a real hosted backend later, set `VITE_API_BASE_URL` in Vercel to the backend's `/api` base URL.
+
 ## Validation commands
 
 ```powershell

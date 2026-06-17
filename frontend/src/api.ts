@@ -13,10 +13,22 @@ import type {
   TaskUpdatePayload,
   WorkspaceResponse,
 } from './types'
+import * as mockApi from './mockApi'
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:8000/api'
+const runtimeHostname = typeof window === 'undefined' ? '' : window.location.hostname
+const configuredApiBaseUrl = import.meta.env.VITE_API_BASE_URL
+const localApiBaseUrl =
+  runtimeHostname === '127.0.0.1' || runtimeHostname === 'localhost'
+    ? 'http://127.0.0.1:8000/api'
+    : null
+const API_BASE_URL = configuredApiBaseUrl ?? localApiBaseUrl
+const useBrowserDemoMode = API_BASE_URL === null
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  if (API_BASE_URL === null) {
+    throw new Error('API base URL is not configured.')
+  }
+
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...init,
     headers: {
@@ -33,15 +45,31 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await response.json()) as T
 }
 
+export function getDataSourceMode(): 'backend' | 'browser-demo' {
+  return useBrowserDemoMode ? 'browser-demo' : 'backend'
+}
+
 export function getDashboard(): Promise<DashboardResponse> {
+  if (useBrowserDemoMode) {
+    return mockApi.getDashboard()
+  }
+
   return request<DashboardResponse>('/dashboard')
 }
 
 export function getWorkspace(saleId: number): Promise<WorkspaceResponse> {
+  if (useBrowserDemoMode) {
+    return mockApi.getWorkspace(saleId)
+  }
+
   return request<WorkspaceResponse>(`/sales/${saleId}/workspace`)
 }
 
 export function createSale(payload: SalePayload): Promise<SaleRead> {
+  if (useBrowserDemoMode) {
+    return mockApi.createSale(payload)
+  }
+
   return request<SaleRead>('/sales', {
     method: 'POST',
     body: JSON.stringify(payload),
@@ -49,6 +77,10 @@ export function createSale(payload: SalePayload): Promise<SaleRead> {
 }
 
 export function updateSale(saleId: number, payload: SalePayload): Promise<SaleRead> {
+  if (useBrowserDemoMode) {
+    return mockApi.updateSale(saleId, payload)
+  }
+
   return request<SaleRead>(`/sales/${saleId}`, {
     method: 'PATCH',
     body: JSON.stringify(payload),
@@ -56,6 +88,10 @@ export function updateSale(saleId: number, payload: SalePayload): Promise<SaleRe
 }
 
 export function createCategory(payload: CategoryPayload): Promise<CategoryRead> {
+  if (useBrowserDemoMode) {
+    return mockApi.createCategory(payload)
+  }
+
   return request<CategoryRead>('/categories', {
     method: 'POST',
     body: JSON.stringify(payload),
@@ -63,6 +99,10 @@ export function createCategory(payload: CategoryPayload): Promise<CategoryRead> 
 }
 
 export function updateCategory(categoryId: number, payload: CategoryPayload): Promise<CategoryRead> {
+  if (useBrowserDemoMode) {
+    return mockApi.updateCategory(categoryId, payload)
+  }
+
   return request<CategoryRead>(`/categories/${categoryId}`, {
     method: 'PATCH',
     body: JSON.stringify(payload),
@@ -70,6 +110,10 @@ export function updateCategory(categoryId: number, payload: CategoryPayload): Pr
 }
 
 export function createItem(payload: ItemPayload): Promise<ItemRead> {
+  if (useBrowserDemoMode) {
+    return mockApi.createItem(payload)
+  }
+
   return request<ItemRead>('/items', {
     method: 'POST',
     body: JSON.stringify(payload),
@@ -77,6 +121,10 @@ export function createItem(payload: ItemPayload): Promise<ItemRead> {
 }
 
 export function updateItem(itemId: number, payload: ItemUpdatePayload): Promise<ItemRead> {
+  if (useBrowserDemoMode) {
+    return mockApi.updateItem(itemId, payload)
+  }
+
   return request<ItemRead>(`/items/${itemId}`, {
     method: 'PATCH',
     body: JSON.stringify(payload),
@@ -84,6 +132,10 @@ export function updateItem(itemId: number, payload: ItemUpdatePayload): Promise<
 }
 
 export function bulkUpdateItems(payload: BulkItemUpdatePayload): Promise<ItemRead[]> {
+  if (useBrowserDemoMode) {
+    return mockApi.bulkUpdateItems(payload)
+  }
+
   const normalizedPayload = {
     ...payload,
     category_id: payload.category_id === undefined ? undefined : payload.category_id,
@@ -96,6 +148,10 @@ export function bulkUpdateItems(payload: BulkItemUpdatePayload): Promise<ItemRea
 }
 
 export function createTask(payload: TaskPayload): Promise<TaskRead> {
+  if (useBrowserDemoMode) {
+    return mockApi.createTask(payload)
+  }
+
   return request<TaskRead>('/tasks', {
     method: 'POST',
     body: JSON.stringify(payload),
@@ -103,6 +159,10 @@ export function createTask(payload: TaskPayload): Promise<TaskRead> {
 }
 
 export function updateTask(taskId: number, payload: TaskUpdatePayload): Promise<TaskRead> {
+  if (useBrowserDemoMode) {
+    return mockApi.updateTask(taskId, payload)
+  }
+
   return request<TaskRead>(`/tasks/${taskId}`, {
     method: 'PATCH',
     body: JSON.stringify(payload),
