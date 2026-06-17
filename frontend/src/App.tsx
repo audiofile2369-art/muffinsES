@@ -506,7 +506,6 @@ function App() {
         <div className="section-heading">
           <div>
             <h2>Sales</h2>
-            <p>Pick the sale Amanda is working on right now.</p>
           </div>
           <button
             type="button"
