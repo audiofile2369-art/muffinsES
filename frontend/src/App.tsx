@@ -5,7 +5,6 @@ import {
   createItem,
   createSale,
   createTask,
-  getDataSourceMode,
   getDashboard,
   getWorkspace,
   updateCategory,
@@ -176,7 +175,6 @@ function App() {
   const [categoryForm, setCategoryForm] = useState<CategoryFormState>(createEmptyCategoryForm)
   const [itemForm, setItemForm] = useState<ItemFormState>(createEmptyItemForm)
   const [taskForm, setTaskForm] = useState<TaskFormState>(createEmptyTaskForm)
-  const dataSourceMode = getDataSourceMode()
 
   const categoryLookup = useMemo(() => {
     const entries: Array<[number, string]> =
@@ -499,14 +497,7 @@ function App() {
   return (
     <div className="app-shell">
       <header className="app-header">
-        <span className="eyebrow">Simple phone-first estate sale app</span>
-        <h1>MuffinES</h1>
-        <p>Big buttons, one-screen workflow, and no extra crap in the way.</p>
-        {dataSourceMode === 'browser-demo' ? (
-          <div className="mode-banner">
-            Running in browser storage mode. Changes save in this browser.
-          </div>
-        ) : null}
+        <h1>Muffin Esate Sales</h1>
       </header>
 
       {errorMessage ? <div className="notice error">{errorMessage}</div> : null}
