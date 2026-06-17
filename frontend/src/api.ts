@@ -16,6 +16,8 @@ import type {
 } from './types'
 import * as mockApi from './mockApi'
 
+const LEGACY_BROWSER_IMPORT_FLAG = 'muffines-imported-browser-data-v1'
+
 const runtimeHostname = typeof window === 'undefined' ? '' : window.location.hostname
 const configuredApiBaseUrl = import.meta.env.VITE_API_BASE_URL
 const localApiBaseUrl =
@@ -169,6 +171,83 @@ export function updateTask(taskId: number, payload: TaskUpdatePayload): Promise<
     method: 'PATCH',
     body: JSON.stringify(payload),
   })
+}
+
+export async function importLegacyBrowserDataToBackend(): Promise<boolean> {
+  if (useBrowserDemoMode || typeof window === 'undefined') {
+    return false
+  }
+
+  if (window.localStorage.getItem(LEGACY_BROWSER_IMPORT_FLAG) === 'done') {
+    return false
+  }
+
+  const browserState = mockApi.getStoredBrowserState()
+  if (!browserState || browserState.sales.length === 0) {
+    return false
+  }
+
+  const categoryIdMap = new Map<number, number>()
+  for (const category of browserState.categories) {
+    const createdCategory = await createCategory({
+      name: category.name,
+      color: category.color,
+      sort_order: category.sort_order,
+    })
+    categoryIdMap.set(category.id, createdCategory.id)
+  }
+
+  const saleIdMap = new Map<number, number>()
+  for (const sale of browserState.sales) {
+    const createdSale = await createSale({
+      title: sale.title,
+      address: sale.address,
+      start_date: sale.start_date,
+      end_date: sale.end_date,
+      status: sale.status,
+      notes: sale.notes,
+    })
+    saleIdMap.set(sale.id, createdSale.id)
+  }
+
+  for (const item of browserState.items) {
+    const migratedSaleId = saleIdMap.get(item.sale_id)
+    if (!migratedSaleId) {
+      continue
+    }
+
+    await createItem({
+      sale_id: migratedSaleId,
+      category_id: item.category_id === null ? null : (categoryIdMap.get(item.category_id) ?? null),
+      title: item.title,
+      description: item.description,
+      room: item.room,
+      condition: item.condition,
+      price: item.price,
+      status: item.status,
+      notes: item.notes,
+      photo_url: item.photo_url,
+    })
+  }
+
+  for (const task of browserState.tasks) {
+    const migratedSaleId = saleIdMap.get(task.sale_id)
+    if (!migratedSaleId) {
+      continue
+    }
+
+    await createTask({
+      sale_id: migratedSaleId,
+      title: task.title,
+      due_date: task.due_date,
+      status: task.status,
+      notes: task.notes,
+    })
+  }
+
+  mockApi.clearStoredBrowserState()
+  window.localStorage.setItem(LEGACY_BROWSER_IMPORT_FLAG, 'done')
+  return true
 }
 
 export async function estimatePriceFromPhoto(

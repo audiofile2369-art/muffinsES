@@ -8,6 +8,7 @@ import {
   estimatePriceFromPhoto,
   getDashboard,
   getWorkspace,
+  importLegacyBrowserDataToBackend,
   updateCategory,
   updateItem,
   updateSale,
@@ -260,7 +261,13 @@ function App() {
     setErrorMessage('')
 
     try {
-      const nextDashboard = await getDashboard()
+      let nextDashboard = await getDashboard()
+      if (nextDashboard.sales.length === 0) {
+        const importedBrowserData = await importLegacyBrowserDataToBackend()
+        if (importedBrowserData) {
+          nextDashboard = await getDashboard()
+        }
+      }
       setDashboard(nextDashboard)
       const resolvedSaleId = preferredSaleId ?? selectedSaleId ?? nextDashboard.sales[0]?.id ?? null
 

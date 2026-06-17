@@ -48,6 +48,38 @@ function createInitialState(): MockState {
   }
 }
 
+export function getStoredBrowserState(): {
+  sales: SaleRead[]
+  categories: CategoryRead[]
+  items: ItemRead[]
+  tasks: TaskRead[]
+} | null {
+  if (typeof window === 'undefined') {
+    return null
+  }
+
+  const existingState = window.localStorage.getItem(STORAGE_KEY)
+  if (!existingState) {
+    return null
+  }
+
+  const parsedState = JSON.parse(existingState) as MockState
+  return {
+    sales: parsedState.sales,
+    categories: parsedState.categories,
+    items: parsedState.items,
+    tasks: parsedState.tasks,
+  }
+}
+
+export function clearStoredBrowserState(): void {
+  if (typeof window === 'undefined') {
+    return
+  }
+
+  window.localStorage.removeItem(STORAGE_KEY)
+}
+
 function loadState(): MockState {
   if (typeof window === 'undefined') {
     return createInitialState()
