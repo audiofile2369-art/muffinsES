@@ -49,7 +49,7 @@ interface ItemFormState {
   id: number | null
   title: string
   description: string
-  categoryId: string
+  categoryName: string
   room: string
   condition: string
   price: string
@@ -108,7 +108,7 @@ function createEmptyItemForm(): ItemFormState {
     id: null,
     title: '',
     description: '',
-    categoryId: '',
+    categoryName: '',
     room: 'General',
     condition: 'Good',
     price: '',
@@ -199,6 +199,11 @@ function App() {
       return matchesQuery
     })
   }, [saleFilter, workspace])
+
+  const roomOptions = useMemo(() => {
+    const rooms = workspace?.items.map((item) => item.room.trim()).filter(Boolean) ?? []
+    return [...new Set(rooms)].sort((left, right) => left.localeCompare(right))
+  }, [workspace?.items])
 
   const categoryMetrics = useMemo(() => {
     if (!workspace) {
@@ -298,7 +303,7 @@ function App() {
   function buildItemPayload(saleId: number): ItemPayload {
     return {
       sale_id: saleId,
-      category_id: itemForm.categoryId ? Number(itemForm.categoryId) : null,
+      category_id: null,
       title: itemForm.title.trim(),
       description: itemForm.description.trim(),
       room: itemForm.room.trim() || 'General',
@@ -310,10 +315,10 @@ function App() {
     }
   }
 
-  function buildItemUpdatePayload(saleId: number): ItemUpdatePayload {
+  function buildItemUpdatePayload(saleId: number, categoryId: number | null): ItemUpdatePayload {
     const payload = buildItemPayload(saleId)
     return {
-      category_id: payload.category_id,
+      category_id: categoryId,
       title: payload.title,
       description: payload.description,
       room: payload.room,
@@ -323,6 +328,31 @@ function App() {
       notes: payload.notes,
       photo_url: payload.photo_url,
     }
+  }
+
+  async function resolveCategoryId(categoryName: string): Promise<number | null> {
+    if (!workspace) {
+      return null
+    }
+
+    const normalizedCategoryName = categoryName.trim()
+    if (normalizedCategoryName.length === 0) {
+      return null
+    }
+
+    const existingCategory = workspace.categories.find(
+      (category) => category.name.toLowerCase() === normalizedCategoryName.toLowerCase(),
+    )
+    if (existingCategory) {
+      return existingCategory.id
+    }
+
+    const createdCategory = await createCategory({
+      name: normalizedCategoryName,
+      color: '#8b5cf6',
+      sort_order: workspace.categories.length + 1,
+    })
+    return createdCategory.id
   }
 
   function buildTaskPayload(saleId: number): TaskPayload {
@@ -400,10 +430,15 @@ function App() {
     }
 
     await withSavingState(async () => {
+      const resolvedCategoryId = await resolveCategoryId(itemForm.categoryName)
+
       if (itemForm.id === null) {
-        await createItem(buildItemPayload(workspace.sale.id))
+        await createItem({
+          ...buildItemPayload(workspace.sale.id),
+          category_id: resolvedCategoryId,
+        })
       } else {
-        await updateItem(itemForm.id, buildItemUpdatePayload(workspace.sale.id))
+        await updateItem(itemForm.id, buildItemUpdatePayload(workspace.sale.id, resolvedCategoryId))
       }
 
       setItemForm(createEmptyItemForm())
@@ -443,7 +478,7 @@ function App() {
       id: item.id,
       title: item.title,
       description: item.description,
-      categoryId: item.category_id ? String(item.category_id) : '',
+      categoryName: categoryLookup.get(item.category_id ?? -1) ?? '',
       room: item.room,
       condition: item.condition,
       price: item.price === null ? '' : String(item.price),
@@ -739,27 +774,35 @@ function App() {
                 <div className="form-row">
                   <label>
                     Category
-                    <select
-                      value={itemForm.categoryId}
+                    <input
+                      type="text"
+                      list="saved-categories"
+                      placeholder="Type a category or pick one"
+                      value={itemForm.categoryName}
                       onChange={(event) =>
-                        setItemForm((current) => ({ ...current, categoryId: event.target.value }))
+                        setItemForm((current) => ({ ...current, categoryName: event.target.value }))
                       }
-                    >
-                      <option value="">Uncategorized</option>
+                    />
+                    <datalist id="saved-categories">
                       {workspace.categories.map((category) => (
-                        <option key={category.id} value={category.id}>
-                          {category.name}
-                        </option>
+                        <option key={category.id} value={category.name} />
                       ))}
-                    </select>
+                    </datalist>
                   </label>
                   <label>
                     Room
                     <input
                       type="text"
+                      list="saved-rooms"
+                      placeholder="Type a room or pick one"
                       value={itemForm.room}
                       onChange={(event) => setItemForm((current) => ({ ...current, room: event.target.value }))}
                     />
+                    <datalist id="saved-rooms">
+                      {roomOptions.map((room) => (
+                        <option key={room} value={room} />
+                      ))}
+                    </datalist>
                   </label>
                 </div>
                 <label>
