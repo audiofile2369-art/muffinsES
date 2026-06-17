@@ -986,7 +986,7 @@ function App() {
           </p>
           {dataSourceMode === 'browser-demo' ? (
             <div className="mode-banner">
-              Running in browser storage mode for deployment preview. Changes save in this browser.
+              Running in browser storage mode. Changes save in this browser.
             </div>
           ) : null}
         </div>

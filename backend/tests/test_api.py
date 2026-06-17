@@ -2,7 +2,16 @@
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
 from fastapi.testclient import TestClient
+
+TEST_DATABASE_PATH = Path(__file__).resolve().parents[2] / "data" / "test-api.db"
+TEST_DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
+if TEST_DATABASE_PATH.exists():
+    TEST_DATABASE_PATH.unlink()
+os.environ["MUFFINES_DATABASE_PATH"] = str(TEST_DATABASE_PATH)
 
 from backend.main import app
 
@@ -17,42 +26,60 @@ def test_health_endpoint() -> None:
     assert response.json() == {"status": "ok"}
 
 
-def test_dashboard_returns_seeded_sales() -> None:
-    """The dashboard should return the seeded sample sales."""
+def test_dashboard_starts_empty() -> None:
+    """The dashboard should start empty with no seeded sales."""
 
     with TestClient(app) as client:
         response = client.get("/api/dashboard")
 
     body = response.json()
     assert response.status_code == 200
-    assert len(body["sales"]) >= 2
-    assert any(sale["item_count"] > 0 for sale in body["sales"])
+    assert body["sales"] == []
 
 
-def test_workspace_returns_items_tasks_and_reports() -> None:
-    """The workspace response should include the main sale management payload."""
+def test_can_create_sale_and_load_workspace() -> None:
+    """A created sale should load an empty workspace payload."""
 
     with TestClient(app) as client:
-        dashboard_response = client.get("/api/dashboard")
-        first_sale_id = dashboard_response.json()["sales"][0]["id"]
-        workspace_response = client.get(f"/api/sales/{first_sale_id}/workspace")
+        create_response = client.post(
+            "/api/sales",
+            json={
+                "title": "Amanda Starter Sale",
+                "address": "12 Starter Lane",
+                "start_date": "2026-07-01",
+                "end_date": "2026-07-03",
+                "status": "planning",
+                "notes": "Initial clean slate sale.",
+            },
+        )
+        sale_id = create_response.json()["id"]
+        workspace_response = client.get(f"/api/sales/{sale_id}/workspace")
 
     body = workspace_response.json()
+    assert create_response.status_code == 200
     assert workspace_response.status_code == 200
-    assert body["sale"]["id"] == first_sale_id
-    assert isinstance(body["items"], list)
-    assert isinstance(body["tasks"], list)
-    assert "sell_through_rate" in body["report"]
+    assert body["sale"]["id"] == sale_id
+    assert body["items"] == []
+    assert body["tasks"] == []
+    assert body["report"]["total_items"] == 0
 
 
 def test_partial_sale_patch_preserves_optional_fields() -> None:
     """A partial sale patch should not blank out omitted optional fields."""
 
     with TestClient(app) as client:
-        dashboard_response = client.get("/api/dashboard")
-        first_sale = dashboard_response.json()["sales"][0]
-        workspace_response = client.get(f"/api/sales/{first_sale['id']}/workspace")
-        sale = workspace_response.json()["sale"]
+        create_response = client.post(
+            "/api/sales",
+            json={
+                "title": "Patchable Sale",
+                "address": "45 Notes Avenue",
+                "start_date": "2026-08-10",
+                "end_date": "2026-08-11",
+                "status": "ready",
+                "notes": "Keep these details intact.",
+            },
+        )
+        sale = create_response.json()
 
         patch_response = client.patch(
             f"/api/sales/{sale['id']}",

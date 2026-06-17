@@ -10,7 +10,7 @@ from sqlmodel import Session, select
 
 from backend.config.database import close_db, database, get_db
 from backend.config.settings import get_logger, get_settings
-from backend.core.bootstrap import seed_demo_data
+from backend.core.bootstrap import initialize_database
 from backend.core.models import Category, Item, Sale, Task
 from backend.core.reporting import build_sale_summary, build_workspace_response
 from backend.core.schemas import (
@@ -41,7 +41,7 @@ async def lifespan(_: FastAPI):
 
     database.create_tables()
     with database.get_session() as session:
-        seed_demo_data(session)
+        initialize_database(session)
     yield
     close_db()
 
