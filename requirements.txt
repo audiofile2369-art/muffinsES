@@ -1,1 +1,8 @@
--r backend/requirements.txt
+openai
+fastapi
+httpx
+psycopg[binary]
+python-multipart
+pytest
+sqlmodel
+uvicorn[standard]
