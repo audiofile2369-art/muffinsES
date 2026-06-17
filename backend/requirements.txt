@@ -1,6 +1,8 @@
 fastapi
 httpx
+openai
 psycopg[binary]
+python-multipart
 pytest
 sqlmodel
 uvicorn[standard]

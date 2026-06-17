@@ -18,6 +18,8 @@ class Settings:
     database_url: str
     database_source: str
     neon_db_path: Path
+    openai_api_key_path: Path
+    pricing_model: str
     uploads_dir: Path
     api_prefix: str
     frontend_origins: tuple[str, ...]
@@ -32,17 +34,21 @@ def get_settings() -> Settings:
     data_dir = project_root / "data"
     uploads_dir = data_dir / "uploads"
     neon_db_path = project_root / "neon_db.txt"
+    openai_api_key_path = project_root / "open api.txt"
     database_url_override = os.getenv("MUFFINES_DATABASE_URL")
     database_path_override = os.getenv("MUFFINES_DATABASE_PATH")
+    pricing_model = os.getenv("MUFFINES_PRICING_MODEL", "gpt-4.1-mini")
 
     if database_url_override:
-        database_url = database_url_override
+        database_url = normalize_database_url(database_url_override)
         database_source = "environment URL"
     elif database_path_override:
         database_url = f"sqlite:///{Path(database_path_override)}"
         database_source = "environment path"
     elif neon_db_path.exists():
-        database_url = neon_db_path.read_text(encoding="utf-8").strip()
+        database_url = normalize_database_url(
+            neon_db_path.read_text(encoding="utf-8").strip()
+        )
         database_source = "neon_db.txt"
     else:
         database_url = f"sqlite:///{data_dir / 'muffines.db'}"
@@ -54,11 +60,21 @@ def get_settings() -> Settings:
         database_url=database_url,
         database_source=database_source,
         neon_db_path=neon_db_path,
+        openai_api_key_path=openai_api_key_path,
+        pricing_model=pricing_model,
         uploads_dir=uploads_dir,
         api_prefix="/api",
         frontend_origins=("http://127.0.0.1:5173", "http://localhost:5173"),
         app_name="MuffinES",
     )
+
+
+def normalize_database_url(raw_url: str) -> str:
+    """Normalize external database URLs for the installed SQLAlchemy drivers."""
+
+    if raw_url.startswith("postgresql://"):
+        return raw_url.replace("postgresql://", "postgresql+psycopg://", 1)
+    return raw_url
 
 
 def get_logger(name: str) -> logging.Logger:

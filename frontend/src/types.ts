@@ -142,3 +142,14 @@ export interface BulkItemUpdatePayload {
   status?: ItemStatus
   category_id?: number | null
 }
+
+export interface PricingEstimateResponse {
+  suggested_title: string
+  suggested_category: string
+  suggested_room: string
+  estimated_price: number | null
+  low_estimate: number | null
+  high_estimate: number | null
+  reasoning: string
+  follow_up_questions: string[]
+}

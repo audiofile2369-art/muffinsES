@@ -16,6 +16,7 @@ MuffinES is a responsive estate sale management app for Amanda to manage multipl
 - `frontend/` - Vite React app and UI
 - `data/` - runtime SQLite database and uploads directory, created automatically
 - `neon_db.txt` - local-only Neon connection string file for the backend (ignored by Git)
+- `open api.txt` - local-only OpenAI API key file for AI pricing (ignored by Git)
 
 ## Run the backend
 
@@ -25,6 +26,8 @@ Set-Location C:\Users\saarm\Projects\MuffinES
 ```
 
 The backend now prefers the Neon connection string stored in `neon_db.txt`. If that file is missing, it falls back to local SQLite.
+
+For AI pricing, the backend reads the OpenAI key from `open api.txt` or the `OPENAI_API_KEY` environment variable.
 
 ## Run the frontend
 

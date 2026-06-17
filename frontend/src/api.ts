@@ -6,6 +6,7 @@ import type {
   ItemPayload,
   ItemRead,
   ItemUpdatePayload,
+  PricingEstimateResponse,
   SalePayload,
   SaleRead,
   TaskPayload,
@@ -21,7 +22,8 @@ const localApiBaseUrl =
   runtimeHostname === '127.0.0.1' || runtimeHostname === 'localhost'
     ? 'http://127.0.0.1:8000/api'
     : null
-const API_BASE_URL = configuredApiBaseUrl ?? localApiBaseUrl
+const productionApiBaseUrl = localApiBaseUrl === null ? '/api' : null
+const API_BASE_URL = configuredApiBaseUrl ?? localApiBaseUrl ?? productionApiBaseUrl
 const useBrowserDemoMode = API_BASE_URL === null
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -167,4 +169,39 @@ export function updateTask(taskId: number, payload: TaskUpdatePayload): Promise<
     method: 'PATCH',
     body: JSON.stringify(payload),
   })
+}
+
+export async function estimatePriceFromPhoto(
+  photo: File,
+  categoryHint: string,
+  roomHint: string,
+  notes: string,
+  followUpAnswers: string,
+): Promise<PricingEstimateResponse> {
+  if (useBrowserDemoMode) {
+    throw new Error('AI pricing needs the live backend/API to be available.')
+  }
+
+  if (API_BASE_URL === null) {
+    throw new Error('API base URL is not configured.')
+  }
+
+  const formData = new FormData()
+  formData.append('photo', photo)
+  formData.append('category_hint', categoryHint)
+  formData.append('room_hint', roomHint)
+  formData.append('notes', notes)
+  formData.append('follow_up_answers', followUpAnswers)
+
+  const response = await fetch(`${API_BASE_URL}/pricing/estimate`, {
+    method: 'POST',
+    body: formData,
+  })
+
+  if (!response.ok) {
+    const message = await response.text()
+    throw new Error(message || `Request failed with status ${response.status}`)
+  }
+
+  return (await response.json()) as PricingEstimateResponse
 }

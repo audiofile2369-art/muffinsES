@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import Session, select
 
@@ -12,6 +12,7 @@ from backend.config.database import close_db, database, get_db
 from backend.config.settings import get_logger, get_settings
 from backend.core.bootstrap import initialize_database
 from backend.core.models import Category, Item, Sale, Task
+from backend.core.pricing import PricingConfigurationError, PricingEstimateService
 from backend.core.reporting import build_sale_summary, build_workspace_response
 from backend.core.schemas import (
     BulkItemUpdate,
@@ -20,6 +21,7 @@ from backend.core.schemas import (
     CategoryUpdate,
     DashboardResponse,
     ItemCreate,
+    PricingEstimateResponse,
     ItemRead,
     ItemUpdate,
     SaleCreate,
@@ -117,6 +119,45 @@ def read_health() -> dict[str, str]:
     """Return a simple health response."""
 
     return {"status": "ok"}
+
+
+@app.post(
+    f"{SETTINGS.api_prefix}/pricing/estimate",
+    response_model=PricingEstimateResponse,
+)
+async def estimate_item_price(
+    photo: UploadFile = File(...),
+    category_hint: str = Form(default=""),
+    room_hint: str = Form(default=""),
+    notes: str = Form(default=""),
+    follow_up_answers: str = Form(default=""),
+) -> PricingEstimateResponse:
+    """Estimate an item price from a photo and optional follow-up answers."""
+
+    if photo.content_type not in {"image/jpeg", "image/png", "image/webp"}:
+        raise HTTPException(
+            status_code=400,
+            detail="Please upload a JPG, PNG, or WEBP image.",
+        )
+
+    image_bytes = await photo.read()
+    if not image_bytes:
+        raise HTTPException(status_code=400, detail="The uploaded image was empty.")
+
+    try:
+        pricing_service = PricingEstimateService.from_settings()
+        return pricing_service.estimate_from_image(
+            image_bytes=image_bytes,
+            media_type=photo.content_type,
+            category_hint=category_hint,
+            room_hint=room_hint,
+            notes=notes,
+            follow_up_answers=follow_up_answers,
+        )
+    except PricingConfigurationError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
 
 
 @app.get(f"{SETTINGS.api_prefix}/dashboard", response_model=DashboardResponse)

@@ -5,6 +5,7 @@ import {
   createItem,
   createSale,
   createTask,
+  estimatePriceFromPhoto,
   getDashboard,
   getWorkspace,
   updateCategory,
@@ -20,6 +21,7 @@ import type {
   ItemRead,
   ItemStatus,
   ItemUpdatePayload,
+  PricingEstimateResponse,
   SalePayload,
   SaleStatus,
   TaskPayload,
@@ -175,6 +177,12 @@ function App() {
   const [categoryForm, setCategoryForm] = useState<CategoryFormState>(createEmptyCategoryForm)
   const [itemForm, setItemForm] = useState<ItemFormState>(createEmptyItemForm)
   const [taskForm, setTaskForm] = useState<TaskFormState>(createEmptyTaskForm)
+  const [pricingImageFile, setPricingImageFile] = useState<File | null>(null)
+  const [pricingPreviewUrl, setPricingPreviewUrl] = useState('')
+  const [pricingEstimate, setPricingEstimate] = useState<PricingEstimateResponse | null>(null)
+  const [pricingAnswers, setPricingAnswers] = useState('')
+  const [pricingLoading, setPricingLoading] = useState(false)
+  const [pricingError, setPricingError] = useState('')
 
   const categoryLookup = useMemo(() => {
     const entries: Array<[number, string]> =
@@ -225,6 +233,12 @@ function App() {
     setTaskForm(createEmptyTaskForm())
     setCategoryForm(createEmptyCategoryForm())
     setSaleFilter('')
+    setPricingImageFile(null)
+    setPricingPreviewUrl('')
+    setPricingEstimate(null)
+    setPricingAnswers('')
+    setPricingError('')
+    setPricingLoading(false)
 
     if (nextWorkspace === null) {
       setSaleEditor(createEmptySaleForm())
@@ -355,6 +369,55 @@ function App() {
     return createdCategory.id
   }
 
+  async function requestPriceEstimate(file: File, followUpAnswers: string): Promise<void> {
+    setPricingLoading(true)
+    setPricingError('')
+
+    try {
+      const estimate = await estimatePriceFromPhoto(
+        file,
+        itemForm.categoryName,
+        itemForm.room,
+        itemForm.notes,
+        followUpAnswers,
+      )
+      setPricingEstimate(estimate)
+      setItemForm((current) => ({
+        ...current,
+        title: estimate.suggested_title || current.title,
+        categoryName: estimate.suggested_category || current.categoryName,
+        room: estimate.suggested_room || current.room,
+        price:
+          estimate.estimated_price === null ? current.price : String(estimate.estimated_price),
+      }))
+    } catch (error) {
+      setPricingError(error instanceof Error ? error.message : 'Unable to estimate price right now.')
+    } finally {
+      setPricingLoading(false)
+    }
+  }
+
+  async function handlePhotoSelected(event: FormEvent<HTMLInputElement>): Promise<void> {
+    const file = event.currentTarget.files?.[0]
+    if (!file) {
+      return
+    }
+
+    setPricingImageFile(file)
+    setPricingPreviewUrl(URL.createObjectURL(file))
+    setPricingEstimate(null)
+    setPricingAnswers('')
+    await requestPriceEstimate(file, '')
+  }
+
+  async function handleRefreshEstimate(): Promise<void> {
+    if (!pricingImageFile) {
+      return
+    }
+
+    await requestPriceEstimate(pricingImageFile, pricingAnswers)
+  }
+
   function buildTaskPayload(saleId: number): TaskPayload {
     return {
       sale_id: saleId,
@@ -442,6 +505,11 @@ function App() {
       }
 
       setItemForm(createEmptyItemForm())
+      setPricingImageFile(null)
+      setPricingPreviewUrl('')
+      setPricingEstimate(null)
+      setPricingAnswers('')
+      setPricingError('')
       await refreshWorkspaceAndDashboard(workspace.sale.id)
     })
   }
@@ -486,6 +554,11 @@ function App() {
       notes: item.notes,
       photoUrl: item.photo_url ?? '',
     })
+    setPricingImageFile(null)
+    setPricingPreviewUrl('')
+    setPricingEstimate(null)
+    setPricingAnswers('')
+    setPricingError('')
   }
 
   function beginEditingTask(task: TaskRead): void {
@@ -732,6 +805,67 @@ function App() {
                     </button>
                   ) : null}
                 </div>
+                <label>
+                  Photo for AI pricing
+                  <input
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp"
+                    capture="environment"
+                    onChange={(event) => void handlePhotoSelected(event)}
+                  />
+                </label>
+                {pricingPreviewUrl ? (
+                  <img
+                    src={pricingPreviewUrl}
+                    alt="Item preview for pricing"
+                    className="pricing-preview"
+                  />
+                ) : null}
+                {pricingLoading ? <p className="hint-copy">Checking the photo and estimating price...</p> : null}
+                {pricingError ? <div className="notice error">{pricingError}</div> : null}
+                {pricingEstimate ? (
+                  <div className="pricing-card">
+                    <strong>
+                      Suggested price:{' '}
+                      {pricingEstimate.estimated_price === null
+                        ? 'No estimate yet'
+                        : formatCurrency(pricingEstimate.estimated_price)}
+                    </strong>
+                    <small>
+                      Range:{' '}
+                      {pricingEstimate.low_estimate !== null && pricingEstimate.high_estimate !== null
+                        ? `${formatCurrency(pricingEstimate.low_estimate)} to ${formatCurrency(pricingEstimate.high_estimate)}`
+                        : 'Not available'}
+                    </small>
+                    {pricingEstimate.reasoning ? <p>{pricingEstimate.reasoning}</p> : null}
+                    {pricingEstimate.follow_up_questions.length ? (
+                      <>
+                        <div className="question-list">
+                          {pricingEstimate.follow_up_questions.map((question) => (
+                            <p key={question}>{question}</p>
+                          ))}
+                        </div>
+                        <label>
+                          Answers for the AI
+                          <textarea
+                            rows={3}
+                            value={pricingAnswers}
+                            onChange={(event) => setPricingAnswers(event.target.value)}
+                            placeholder="Example: solid oak, small chip on the top, 48 inches wide."
+                          />
+                        </label>
+                        <button
+                          type="button"
+                          className="secondary-button"
+                          onClick={() => void handleRefreshEstimate()}
+                          disabled={pricingLoading}
+                        >
+                          Update estimate
+                        </button>
+                      </>
+                    ) : null}
+                  </div>
+                ) : null}
                 <label>
                   Item name
                   <input

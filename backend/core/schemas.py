@@ -214,3 +214,16 @@ class WorkspaceResponse(SQLModel):
     items: list[ItemRead]
     tasks: list[TaskRead]
     report: ReportMetrics
+
+
+class PricingEstimateResponse(SQLModel):
+    """AI pricing estimate returned from an item photo."""
+
+    suggested_title: str
+    suggested_category: str
+    suggested_room: str
+    estimated_price: float | None
+    low_estimate: float | None
+    high_estimate: float | None
+    reasoning: str
+    follow_up_questions: list[str]
