@@ -41,8 +41,9 @@ The frontend now binds to **`http://127.0.0.1:5173`** by default and proxies `/a
 ## Vercel deployment
 
 - `vercel.json` is configured so Vercel can build the Vite app from the repo root even though the frontend lives in `frontend/`.
-- When no `VITE_API_BASE_URL` is configured, the deployed frontend falls back to a **browser storage mode** so the app still works on Vercel without the local backend.
-- To use a real hosted backend later, set `VITE_API_BASE_URL` in Vercel to the backend's `/api` base URL.
+- The deployed frontend uses the embedded FastAPI backend through the `/api` rewrite in `vercel.json`.
+- For persistent deployed sale data, configure a shared database with one of `MUFFINES_DATABASE_URL`, `DATABASE_URL`, `POSTGRES_URL`, or `NEON_DATABASE_URL`. Without one, Vercel falls back to temporary local SQLite storage.
+- For AI pricing on Vercel, set `OPENAI_API_KEY` in the deployment environment. The local-only `open api.txt` file is ignored by Git and is only available when you run the backend on your own machine.
 
 ## Validation commands
 

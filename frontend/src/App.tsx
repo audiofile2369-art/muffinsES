@@ -160,6 +160,20 @@ function titleCase(value: string): string {
     .replace(/\b\w/g, (letter) => letter.toUpperCase())
 }
 
+function resolveSelectedSaleId(
+  sales: DashboardResponse['sales'],
+  preferredSaleId?: number | null,
+): number | null {
+  if (preferredSaleId !== null && preferredSaleId !== undefined) {
+    const matchingSale = sales.find((sale) => sale.id === preferredSaleId)
+    if (matchingSale) {
+      return matchingSale.id
+    }
+  }
+
+  return sales[0]?.id ?? null
+}
+
 function escapeCsvValue(value: string): string {
   return `"${value.replace(/"/g, '""')}"`
 }
@@ -172,6 +186,7 @@ function App() {
   const [saving, setSaving] = useState(false)
   const [errorMessage, setErrorMessage] = useState('')
   const [showNewSaleForm, setShowNewSaleForm] = useState(false)
+  const [showItemForm, setShowItemForm] = useState(false)
   const [saleFilter, setSaleFilter] = useState('')
   const [newSaleForm, setNewSaleForm] = useState<SaleFormState>(createEmptySaleForm)
   const [saleEditor, setSaleEditor] = useState<SaleFormState>(createEmptySaleForm)
@@ -228,18 +243,30 @@ function App() {
     })
   }, [workspace])
 
-  const applyWorkspaceState = useCallback((nextWorkspace: WorkspaceResponse | null): void => {
-    setWorkspace(nextWorkspace)
-    setItemForm(createEmptyItemForm())
-    setTaskForm(createEmptyTaskForm())
-    setCategoryForm(createEmptyCategoryForm())
-    setSaleFilter('')
+  const resetPricingState = useCallback((): void => {
     setPricingImageFile(null)
     setPricingPreviewUrl('')
     setPricingEstimate(null)
     setPricingAnswers('')
     setPricingError('')
     setPricingLoading(false)
+  }, [])
+
+  const resetItemEditor = useCallback(
+    (shouldShowForm = false): void => {
+      setItemForm(createEmptyItemForm())
+      resetPricingState()
+      setShowItemForm(shouldShowForm)
+    },
+    [resetPricingState],
+  )
+
+  const applyWorkspaceState = useCallback((nextWorkspace: WorkspaceResponse | null): void => {
+    setWorkspace(nextWorkspace)
+    resetItemEditor(false)
+    setTaskForm(createEmptyTaskForm())
+    setCategoryForm(createEmptyCategoryForm())
+    setSaleFilter('')
 
     if (nextWorkspace === null) {
       setSaleEditor(createEmptySaleForm())
@@ -254,9 +281,9 @@ function App() {
       status: nextWorkspace.sale.status,
       notes: nextWorkspace.sale.notes,
     })
-  }, [])
+  }, [resetItemEditor])
 
-  const refreshWorkspaceAndDashboard = useCallback(async (preferredSaleId?: number): Promise<void> => {
+  const refreshWorkspaceAndDashboard = useCallback(async (preferredSaleId?: number | null): Promise<void> => {
     setLoading(true)
     setErrorMessage('')
 
@@ -269,7 +296,7 @@ function App() {
         }
       }
       setDashboard(nextDashboard)
-      const resolvedSaleId = preferredSaleId ?? selectedSaleId ?? nextDashboard.sales[0]?.id ?? null
+      const resolvedSaleId = resolveSelectedSaleId(nextDashboard.sales, preferredSaleId)
 
       if (resolvedSaleId === null) {
         applyWorkspaceState(null)
@@ -277,15 +304,18 @@ function App() {
         return
       }
 
+      setShowNewSaleForm(false)
       setSelectedSaleId(resolvedSaleId)
       const nextWorkspace = await getWorkspace(resolvedSaleId)
       applyWorkspaceState(nextWorkspace)
     } catch (error) {
+      applyWorkspaceState(null)
+      setSelectedSaleId(null)
       setErrorMessage(error instanceof Error ? error.message : 'Unable to load the app.')
     } finally {
       setLoading(false)
     }
-  }, [applyWorkspaceState, selectedSaleId])
+  }, [applyWorkspaceState])
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
@@ -511,12 +541,7 @@ function App() {
         await updateItem(itemForm.id, buildItemUpdatePayload(workspace.sale.id, resolvedCategoryId))
       }
 
-      setItemForm(createEmptyItemForm())
-      setPricingImageFile(null)
-      setPricingPreviewUrl('')
-      setPricingEstimate(null)
-      setPricingAnswers('')
-      setPricingError('')
+      resetItemEditor(false)
       await refreshWorkspaceAndDashboard(workspace.sale.id)
     })
   }
@@ -549,6 +574,8 @@ function App() {
   }
 
   function beginEditingItem(item: ItemRead): void {
+    resetPricingState()
+    setShowItemForm(true)
     setItemForm({
       id: item.id,
       title: item.title,
@@ -561,11 +588,15 @@ function App() {
       notes: item.notes,
       photoUrl: item.photo_url ?? '',
     })
-    setPricingImageFile(null)
-    setPricingPreviewUrl('')
-    setPricingEstimate(null)
-    setPricingAnswers('')
-    setPricingError('')
+  }
+
+  function toggleItemForm(): void {
+    if (showItemForm || itemForm.id !== null) {
+      resetItemEditor(false)
+      return
+    }
+
+    resetItemEditor(true)
   }
 
   function beginEditingTask(task: TaskRead): void {
@@ -796,168 +827,165 @@ function App() {
                 )}
               </div>
 
-              <form className="stack-form" onSubmit={(event) => void handleItemSubmit(event)}>
-                <div className="section-heading">
-                  <div>
-                    <h3>{itemForm.id === null ? 'Add item' : 'Edit item'}</h3>
-                    <p>Keep it quick and obvious.</p>
-                  </div>
-                  {itemForm.id !== null ? (
-                    <button
-                      type="button"
-                      className="secondary-button"
-                      onClick={() => setItemForm(createEmptyItemForm())}
-                    >
-                      New item
-                    </button>
-                  ) : null}
+              <div className="section-heading">
+                <div>
+                  <h3>{itemForm.id === null ? 'Add item' : 'Edit item'}</h3>
+                  <p>{itemForm.id === null ? 'Hidden until you tap Add item.' : 'Update the selected item below.'}</p>
                 </div>
-                <label>
-                  Photo for AI pricing
-                  <input
-                    type="file"
-                    accept="image/png,image/jpeg,image/webp"
-                    capture="environment"
-                    onChange={(event) => void handlePhotoSelected(event)}
-                  />
-                </label>
-                {pricingPreviewUrl ? (
-                  <img
-                    src={pricingPreviewUrl}
-                    alt="Item preview for pricing"
-                    className="pricing-preview"
-                  />
-                ) : null}
-                {pricingLoading ? <p className="hint-copy">Checking the photo and estimating price...</p> : null}
-                {pricingError ? <div className="notice error">{pricingError}</div> : null}
-                {pricingEstimate ? (
-                  <div className="pricing-card">
-                    <strong>
-                      Suggested price:{' '}
-                      {pricingEstimate.estimated_price === null
-                        ? 'No estimate yet'
-                        : formatCurrency(pricingEstimate.estimated_price)}
-                    </strong>
-                    <small>
-                      Range:{' '}
-                      {pricingEstimate.low_estimate !== null && pricingEstimate.high_estimate !== null
-                        ? `${formatCurrency(pricingEstimate.low_estimate)} to ${formatCurrency(pricingEstimate.high_estimate)}`
-                        : 'Not available'}
-                    </small>
-                    {pricingEstimate.reasoning ? <p>{pricingEstimate.reasoning}</p> : null}
-                    {pricingEstimate.follow_up_questions.length ? (
-                      <>
-                        <div className="question-list">
-                          {pricingEstimate.follow_up_questions.map((question) => (
-                            <p key={question}>{question}</p>
-                          ))}
-                        </div>
-                        <label>
-                          Answers for the AI
-                          <textarea
-                            rows={3}
-                            value={pricingAnswers}
-                            onChange={(event) => setPricingAnswers(event.target.value)}
-                            placeholder="Example: solid oak, small chip on the top, 48 inches wide."
-                          />
-                        </label>
-                        <button
-                          type="button"
-                          className="secondary-button"
-                          onClick={() => void handleRefreshEstimate()}
-                          disabled={pricingLoading}
-                        >
-                          Update estimate
-                        </button>
-                      </>
-                    ) : null}
-                  </div>
-                ) : null}
-                <label>
-                  Item name
-                  <input
-                    type="text"
-                    value={itemForm.title}
-                    onChange={(event) => setItemForm((current) => ({ ...current, title: event.target.value }))}
-                    required
-                  />
-                </label>
-                <div className="form-row">
-                  <label>
-                    Price
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={itemForm.price}
-                      onChange={(event) => setItemForm((current) => ({ ...current, price: event.target.value }))}
-                    />
-                  </label>
-                  <label>
-                    Status
-                    <select
-                      value={itemForm.status}
-                      onChange={(event) =>
-                        setItemForm((current) => ({
-                          ...current,
-                          status: event.target.value as ItemStatus,
-                        }))
-                      }
-                    >
-                      {itemStatusOptions.map((status) => (
-                        <option key={status} value={status}>
-                          {titleCase(status)}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                </div>
-                <div className="form-row">
-                  <label>
-                    Category
-                    <input
-                      type="text"
-                      list="saved-categories"
-                      placeholder="Type a category or pick one"
-                      value={itemForm.categoryName}
-                      onChange={(event) =>
-                        setItemForm((current) => ({ ...current, categoryName: event.target.value }))
-                      }
-                    />
-                    <datalist id="saved-categories">
-                      {workspace.categories.map((category) => (
-                        <option key={category.id} value={category.name} />
-                      ))}
-                    </datalist>
-                  </label>
-                  <label>
-                    Room
-                    <input
-                      type="text"
-                      list="saved-rooms"
-                      placeholder="Type a room or pick one"
-                      value={itemForm.room}
-                      onChange={(event) => setItemForm((current) => ({ ...current, room: event.target.value }))}
-                    />
-                    <datalist id="saved-rooms">
-                      {roomOptions.map((room) => (
-                        <option key={room} value={room} />
-                      ))}
-                    </datalist>
-                  </label>
-                </div>
-                <label>
-                  Notes
-                  <textarea
-                    rows={3}
-                    value={itemForm.notes}
-                    onChange={(event) => setItemForm((current) => ({ ...current, notes: event.target.value }))}
-                  />
-                </label>
-                <button type="submit" className="primary-button" disabled={saving}>
-                  {itemForm.id === null ? 'Save item' : 'Update item'}
+                <button type="button" className="secondary-button" onClick={() => toggleItemForm()}>
+                  {showItemForm || itemForm.id !== null ? 'Close' : 'Add item'}
                 </button>
-              </form>
+              </div>
+
+              {showItemForm || itemForm.id !== null ? (
+                <form className="stack-form" onSubmit={(event) => void handleItemSubmit(event)}>
+                  <label>
+                    Photo for AI pricing
+                    <input
+                      type="file"
+                      accept="image/png,image/jpeg,image/webp"
+                      capture="environment"
+                      onChange={(event) => void handlePhotoSelected(event)}
+                    />
+                  </label>
+                  {pricingPreviewUrl ? (
+                    <img
+                      src={pricingPreviewUrl}
+                      alt="Item preview for pricing"
+                      className="pricing-preview"
+                    />
+                  ) : null}
+                  {pricingLoading ? <p className="hint-copy">Checking the photo and estimating price...</p> : null}
+                  {pricingError ? <div className="notice error">{pricingError}</div> : null}
+                  {pricingEstimate ? (
+                    <div className="pricing-card">
+                      <strong>
+                        Suggested price:{' '}
+                        {pricingEstimate.estimated_price === null
+                          ? 'No estimate yet'
+                          : formatCurrency(pricingEstimate.estimated_price)}
+                      </strong>
+                      <small>
+                        Range:{' '}
+                        {pricingEstimate.low_estimate !== null && pricingEstimate.high_estimate !== null
+                          ? `${formatCurrency(pricingEstimate.low_estimate)} to ${formatCurrency(pricingEstimate.high_estimate)}`
+                          : 'Not available'}
+                      </small>
+                      {pricingEstimate.reasoning ? <p>{pricingEstimate.reasoning}</p> : null}
+                      {pricingEstimate.follow_up_questions.length ? (
+                        <>
+                          <div className="question-list">
+                            {pricingEstimate.follow_up_questions.map((question) => (
+                              <p key={question}>{question}</p>
+                            ))}
+                          </div>
+                          <label>
+                            Answers for the AI
+                            <textarea
+                              rows={3}
+                              value={pricingAnswers}
+                              onChange={(event) => setPricingAnswers(event.target.value)}
+                              placeholder="Example: solid oak, small chip on the top, 48 inches wide."
+                            />
+                          </label>
+                          <button
+                            type="button"
+                            className="secondary-button"
+                            onClick={() => void handleRefreshEstimate()}
+                            disabled={pricingLoading}
+                          >
+                            Update estimate
+                          </button>
+                        </>
+                      ) : null}
+                    </div>
+                  ) : null}
+                  <label>
+                    Item name
+                    <input
+                      type="text"
+                      value={itemForm.title}
+                      onChange={(event) => setItemForm((current) => ({ ...current, title: event.target.value }))}
+                      required
+                    />
+                  </label>
+                  <div className="form-row">
+                    <label>
+                      Price
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={itemForm.price}
+                        onChange={(event) => setItemForm((current) => ({ ...current, price: event.target.value }))}
+                      />
+                    </label>
+                    <label>
+                      Status
+                      <select
+                        value={itemForm.status}
+                        onChange={(event) =>
+                          setItemForm((current) => ({
+                            ...current,
+                            status: event.target.value as ItemStatus,
+                          }))
+                        }
+                      >
+                        {itemStatusOptions.map((status) => (
+                          <option key={status} value={status}>
+                            {titleCase(status)}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                  <div className="form-row">
+                    <label>
+                      Category
+                      <input
+                        type="text"
+                        list="saved-categories"
+                        placeholder="Type a category or pick one"
+                        value={itemForm.categoryName}
+                        onChange={(event) =>
+                          setItemForm((current) => ({ ...current, categoryName: event.target.value }))
+                        }
+                      />
+                      <datalist id="saved-categories">
+                        {workspace.categories.map((category) => (
+                          <option key={category.id} value={category.name} />
+                        ))}
+                      </datalist>
+                    </label>
+                    <label>
+                      Room
+                      <input
+                        type="text"
+                        list="saved-rooms"
+                        placeholder="Type a room or pick one"
+                        value={itemForm.room}
+                        onChange={(event) => setItemForm((current) => ({ ...current, room: event.target.value }))}
+                      />
+                      <datalist id="saved-rooms">
+                        {roomOptions.map((room) => (
+                          <option key={room} value={room} />
+                        ))}
+                      </datalist>
+                    </label>
+                  </div>
+                  <label>
+                    Notes
+                    <textarea
+                      rows={3}
+                      value={itemForm.notes}
+                      onChange={(event) => setItemForm((current) => ({ ...current, notes: event.target.value }))}
+                    />
+                  </label>
+                  <button type="submit" className="primary-button" disabled={saving}>
+                    {itemForm.id === null ? 'Save item' : 'Update item'}
+                  </button>
+                </form>
+              ) : null}
             </div>
           </details>
 

@@ -31,13 +31,13 @@ class PricingEstimateService:
         """Build a pricing service using the configured API key source."""
 
         settings = get_settings()
-        api_key = os.getenv("OPENAI_API_KEY")
+        api_key = os.getenv("OPENAI_API_KEY", "").strip()
         if not api_key and settings.openai_api_key_path.exists():
             api_key = settings.openai_api_key_path.read_text(encoding="utf-8").strip()
 
         if not api_key:
             raise PricingConfigurationError(
-                'AI pricing is not configured yet. Add an OpenAI key to "open api.txt".'
+                'AI pricing is not configured yet. Set OPENAI_API_KEY for hosted deployments or add an OpenAI key to "open api.txt" for local runs.'
             )
 
         return cls(client=OpenAI(api_key=api_key), model=settings.pricing_model)

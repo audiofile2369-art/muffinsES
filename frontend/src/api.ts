@@ -28,6 +28,27 @@ const productionApiBaseUrl = localApiBaseUrl === null ? '/api' : null
 const API_BASE_URL = configuredApiBaseUrl ?? localApiBaseUrl ?? productionApiBaseUrl
 const useBrowserDemoMode = API_BASE_URL === null
 
+function extractErrorMessage(rawMessage: string, status: number): string {
+  const trimmedMessage = rawMessage.trim()
+  if (!trimmedMessage) {
+    return `Request failed with status ${status}`
+  }
+
+  try {
+    const parsed = JSON.parse(trimmedMessage) as { detail?: unknown; message?: unknown }
+    if (typeof parsed.detail === 'string' && parsed.detail.trim()) {
+      return parsed.detail.trim()
+    }
+    if (typeof parsed.message === 'string' && parsed.message.trim()) {
+      return parsed.message.trim()
+    }
+  } catch {
+    // Fall back to the raw response body when the server did not return JSON.
+  }
+
+  return trimmedMessage
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (API_BASE_URL === null) {
     throw new Error('API base URL is not configured.')
@@ -43,7 +64,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
   if (!response.ok) {
     const message = await response.text()
-    throw new Error(message || `Request failed with status ${response.status}`)
+    throw new Error(extractErrorMessage(message, response.status))
   }
 
   return (await response.json()) as T
@@ -279,7 +300,7 @@ export async function estimatePriceFromPhoto(
 
   if (!response.ok) {
     const message = await response.text()
-    throw new Error(message || `Request failed with status ${response.status}`)
+    throw new Error(extractErrorMessage(message, response.status))
   }
 
   return (await response.json()) as PricingEstimateResponse

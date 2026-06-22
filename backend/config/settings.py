@@ -26,6 +26,15 @@ class Settings:
     app_name: str
 
 
+DEPLOYMENT_DATABASE_URL_ENV_VARS = (
+    "DATABASE_URL",
+    "POSTGRES_URL",
+    "POSTGRES_PRISMA_URL",
+    "POSTGRES_URL_NON_POOLING",
+    "NEON_DATABASE_URL",
+)
+
+
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     """Return cached application settings."""
@@ -38,16 +47,18 @@ def get_settings() -> Settings:
     uploads_dir = data_dir / "uploads"
     neon_db_path = project_root / "neon_db.txt"
     openai_api_key_path = project_root / "open api.txt"
-    database_url_override = os.getenv("MUFFINES_DATABASE_URL")
-    database_path_override = os.getenv("MUFFINES_DATABASE_PATH")
+    database_url_override = os.getenv("MUFFINES_DATABASE_URL", "").strip()
+    database_path_override = os.getenv("MUFFINES_DATABASE_PATH", "").strip()
     pricing_model = os.getenv("MUFFINES_PRICING_MODEL", "gpt-4.1-mini")
 
     if database_url_override:
         database_url = normalize_database_url(database_url_override)
-        database_source = "environment URL"
+        database_source = "MUFFINES_DATABASE_URL"
     elif database_path_override:
         database_url = f"sqlite:///{Path(database_path_override)}"
-        database_source = "environment path"
+        database_source = "MUFFINES_DATABASE_PATH"
+    elif external_database_configuration := get_deployment_database_configuration():
+        database_url, database_source = external_database_configuration
     elif neon_db_path.exists():
         database_url = normalize_database_url(
             neon_db_path.read_text(encoding="utf-8").strip()
@@ -78,6 +89,16 @@ def normalize_database_url(raw_url: str) -> str:
     if raw_url.startswith("postgresql://"):
         return raw_url.replace("postgresql://", "postgresql+psycopg://", 1)
     return raw_url
+
+
+def get_deployment_database_configuration() -> tuple[str, str] | None:
+    """Return a hosted database URL from common deployment environment variables."""
+
+    for env_name in DEPLOYMENT_DATABASE_URL_ENV_VARS:
+        raw_url = os.getenv(env_name, "").strip()
+        if raw_url:
+            return normalize_database_url(raw_url), env_name
+    return None
 
 
 def get_logger(name: str) -> logging.Logger:
