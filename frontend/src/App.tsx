@@ -760,29 +760,6 @@ function App() {
 
       {!loading && workspace ? (
         <>
-          <section className="summary-grid">
-            <article className="summary-card">
-              <span>Sale</span>
-              <strong>{workspace.sale.title}</strong>
-              <small>{formatDateRange(workspace.sale.start_date, workspace.sale.end_date)}</small>
-            </article>
-            <article className="summary-card">
-              <span>Items</span>
-              <strong>{workspace.summary.item_count}</strong>
-              <small>{workspace.summary.sold_count} sold</small>
-            </article>
-            <article className="summary-card">
-              <span>Value</span>
-              <strong>{formatCurrency(workspace.report.total_listed_value)}</strong>
-              <small>{formatCurrency(workspace.report.total_sold_value)} sold</small>
-            </article>
-            <article className="summary-card">
-              <span>Tasks</span>
-              <strong>{workspace.summary.pending_task_count}</strong>
-              <small>still open</small>
-            </article>
-          </section>
-
           <details className="surface" open>
             <summary>Items</summary>
             <div className="details-body">
