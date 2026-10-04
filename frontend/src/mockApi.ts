@@ -7,6 +7,7 @@ import type {
   ItemPayload,
   ItemRead,
   ItemUpdatePayload,
+  ItemWithSale,
   ReportMetrics,
   RoomBreakdown,
   SalePayload,
@@ -241,6 +242,21 @@ export async function getDashboard(): Promise<DashboardResponse> {
 
 export async function getWorkspace(saleId: number): Promise<WorkspaceResponse> {
   return buildWorkspace(saleId, loadState())
+}
+
+export async function getAllItems(): Promise<ItemWithSale[]> {
+  const state = loadState()
+  const saleTitles = new Map(state.sales.map((sale) => [sale.id, sale.title]))
+  const categories = new Map(state.categories.map((category) => [category.id, category.name]))
+  return state.items
+    .filter((item) => saleTitles.has(item.sale_id))
+    .sort((left, right) => right.id - left.id)
+    .map((item) => ({
+      ...item,
+      sale_title: saleTitles.get(item.sale_id) ?? '',
+      category_name: categories.get(item.category_id ?? -1) ?? null,
+      created_at: '',
+    }))
 }
 
 export async function createSale(payload: SalePayload): Promise<SaleRead> {

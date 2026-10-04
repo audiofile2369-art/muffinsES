@@ -57,6 +57,13 @@ export interface ItemRead {
   photo_version?: string | null
 }
 
+/** An item from GET /items: every sale, with its sale and category names. */
+export interface ItemWithSale extends ItemRead {
+  sale_title: string
+  category_name: string | null
+  created_at: string
+}
+
 export interface TaskRead {
   id: number
   sale_id: number

@@ -269,3 +269,65 @@ def test_quantity_migration_never_raises() -> None:
 
     engine = create_engine("sqlite:///Z:/definitely/missing/dir/nope.db")
     assert ensure_item_quantity_column(engine) is False
+
+
+def test_all_items_lists_every_sale_with_names_and_photo_versions() -> None:
+    """GET /api/items returns items from every sale in a constant number of queries."""
+
+    from sqlalchemy import event
+
+    from backend.config.database import database
+
+    with TestClient(app) as client:
+        first_sale = client.post(
+            "/api/sales",
+            json={"title": "All Items North", "start_date": "2026-09-01", "end_date": "2026-09-02"},
+        ).json()["id"]
+        second_sale = client.post(
+            "/api/sales",
+            json={"title": "All Items South", "start_date": "2026-09-03", "end_date": "2026-09-04"},
+        ).json()["id"]
+        category_id = client.post("/api/categories", json={"name": "All Items Lamps"}).json()["id"]
+        created_ids = []
+        for index in range(6):
+            sale_id = first_sale if index % 2 == 0 else second_sale
+            response = client.post(
+                "/api/items",
+                json={
+                    "sale_id": sale_id,
+                    "title": f"All items thing {index}",
+                    "category_id": category_id if index == 0 else None,
+                },
+            )
+            assert response.status_code == 200
+            created_ids.append(response.json()["id"])
+        photo = client.put(
+            f"/api/items/{created_ids[0]}/photo",
+            files={"photo": ("lamp.jpg", JPEG_BYTES, "image/jpeg")},
+        )
+        assert photo.status_code == 200
+
+        statements: list[str] = []
+
+        def count_statement(*args: object) -> None:
+            statements.append(str(args[2]))
+
+        event.listen(database.engine, "before_cursor_execute", count_statement)
+        try:
+            response = client.get("/api/items")
+        finally:
+            event.remove(database.engine, "before_cursor_execute", count_statement)
+
+    assert response.status_code == 200
+    body = {item["id"]: item for item in response.json()}
+    assert set(created_ids) <= set(body)
+    assert body[created_ids[0]]["sale_title"] == "All Items North"
+    assert body[created_ids[1]]["sale_title"] == "All Items South"
+    assert body[created_ids[0]]["category_name"] == "All Items Lamps"
+    assert body[created_ids[1]]["category_name"] is None
+    assert body[created_ids[0]]["photo_version"]
+    assert body[created_ids[1]]["photo_version"] is None
+    assert "created_at" in body[created_ids[0]]
+    assert all("photo_data" not in item and "data" not in item for item in body.values())
+    selects = [sql for sql in statements if sql.lstrip().upper().startswith("SELECT")]
+    assert len(selects) <= 2

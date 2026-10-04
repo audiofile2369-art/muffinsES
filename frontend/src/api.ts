@@ -6,6 +6,7 @@ import type {
   ItemPayload,
   ItemRead,
   ItemUpdatePayload,
+  ItemWithSale,
   PricingEstimateResponse,
   SalePayload,
   SaleRead,
@@ -88,6 +89,14 @@ export function getWorkspace(saleId: number): Promise<WorkspaceResponse> {
   }
 
   return request<WorkspaceResponse>(`/sales/${saleId}/workspace`)
+}
+
+export function getAllItems(): Promise<ItemWithSale[]> {
+  if (useBrowserDemoMode) {
+    return mockApi.getAllItems()
+  }
+
+  return request<ItemWithSale[]>('/items')
 }
 
 export function createSale(payload: SalePayload): Promise<SaleRead> {

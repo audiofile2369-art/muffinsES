@@ -32,6 +32,7 @@ from backend.core.schemas import (
     ItemQuantityIncrement,
     ItemRead,
     ItemUpdate,
+    ItemWithSale,
     SaleCreate,
     SaleRead,
     SaleUpdate,
@@ -305,6 +306,30 @@ def update_category(
     session.commit()
     session.refresh(category)
     return CategoryRead.model_validate(category)
+
+
+@app.get(f"{SETTINGS.api_prefix}/items", response_model=list[ItemWithSale])
+def read_all_items(session: Session = Depends(get_db)) -> list[ItemWithSale]:
+    """Return every item across all sales, newest first, in two queries (no photo bytes)."""
+
+    rows = session.exec(
+        select(Item, Sale.title, Category.name)
+        .join(Sale, Item.sale_id == Sale.id)
+        .outerjoin(Category, Item.category_id == Category.id)
+        .order_by(Item.created_at.desc(), Item.id.desc())
+    ).all()
+    versions = load_photo_versions(session, [item.id for item, _, _ in rows if item.id is not None])
+    return [
+        ItemWithSale.model_validate(
+            item,
+            update={
+                "photo_version": versions.get(item.id),
+                "sale_title": sale_title,
+                "category_name": category_name,
+            },
+        )
+        for item, sale_title, category_name in rows
+    ]
 
 
 @app.post(f"{SETTINGS.api_prefix}/items", response_model=ItemRead)

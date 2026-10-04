@@ -19,6 +19,13 @@ import {
   uploadItemPhoto,
 } from './api'
 import './App.css'
+import { formatCurrency, itemMatchesSearch, searchTerms, titleCase } from './format'
+import { AllItemsView } from './AllItemsView'
+import { ItemThumbnail } from './ItemThumbnail'
+import { QuickNav } from './QuickNav'
+import { buildRouteHash, parseRouteHash } from './routes'
+import type { AppRoute, AppView, SaleSection } from './routes'
+import type { PhotoViewerState } from './ItemThumbnail'
 import type {
   CategoryRead,
   DashboardResponse,
@@ -26,6 +33,7 @@ import type {
   ItemRead,
   ItemStatus,
   ItemUpdatePayload,
+  ItemWithSale,
   PricingEstimateResponse,
   SalePayload,
   SaleStatus,
@@ -180,14 +188,6 @@ function createEmptyTaskForm(): TaskFormState {
   }
 }
 
-function formatCurrency(value: number): string {
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-    maximumFractionDigits: 0,
-  }).format(value)
-}
-
 function parseLocalDate(value: string): Date {
   const [year, month, day] = value.split('-').map(Number)
   return new Date(year, month - 1, day)
@@ -200,13 +200,6 @@ function formatDateRange(startDate: string, endDate: string): string {
   })
 
   return `${formatter.format(parseLocalDate(startDate))} - ${formatter.format(parseLocalDate(endDate))}`
-}
-
-function titleCase(value: string): string {
-  return value
-    .split('_')
-    .join(' ')
-    .replace(/\b\w/g, (letter) => letter.toUpperCase())
 }
 
 function resolveSelectedSaleId(
@@ -242,51 +235,6 @@ interface DuplicatePromptState {
   amount: number
 }
 
-interface PhotoViewerState {
-  src: string
-  alt: string
-}
-
-function ItemThumbnail({
-  item,
-  onOpen,
-}: {
-  item: ItemRead
-  onOpen: (photo: PhotoViewerState) => void
-}) {
-  const storedUrl = getItemPhotoUrl(item)
-  const typedUrl = item.photo_url?.trim() || null
-  const [failedSrc, setFailedSrc] = useState<string | null>(null)
-  const candidates = [storedUrl, typedUrl].filter(
-    (url): url is string => Boolean(url) && url !== failedSrc,
-  )
-  const src = candidates[0] ?? null
-  const alt = `Photo of ${item.title}`
-
-  if (!src) {
-    return (
-      <span className="item-thumb item-thumb-placeholder" role="img" aria-label={`No photo for ${item.title}`}>
-        <svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true">
-          <path
-            fill="currentColor"
-            d="M5 4h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Zm0 2v9.6l3.3-3.3a1 1 0 0 1 1.4 0l2.3 2.3 4.3-4.3a1 1 0 0 1 1.4 0L19 11.6V6H5Zm4 3.5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0Z"
-          />
-        </svg>
-      </span>
-    )
-  }
-
-  return (
-    <button
-      type="button"
-      className="item-thumb"
-      aria-label={`View larger photo of ${item.title}`}
-      onClick={() => onOpen({ src, alt })}
-    >
-      <img src={src} alt={alt} loading="lazy" onError={() => setFailedSrc(src)} />
-    </button>
-  )
-}
 
 function App() {
   const [dashboard, setDashboard] = useState<DashboardResponse | null>(null)
@@ -313,6 +261,12 @@ function App() {
   const [removeStoredPhoto, setRemoveStoredPhoto] = useState(false)
   const [photoViewer, setPhotoViewer] = useState<PhotoViewerState | null>(null)
   const [duplicatePrompt, setDuplicatePrompt] = useState<DuplicatePromptState | null>(null)
+  const [view, setView] = useState<AppView>(() => parseRouteHash(window.location.hash).view)
+  const [activeSection, setActiveSection] = useState<SaleSection | null>(
+    () => parseRouteHash(window.location.hash).section ?? null,
+  )
+  // Element id to scroll to once the next view has rendered ('top' scrolls to the top).
+  const pendingScrollRef = useRef<string | null>(null)
   const pricingAutofillRef = useRef<PricingAutofill>({})
   const shownSaleIdRef = useRef<number | null>(null)
 
@@ -328,26 +282,14 @@ function App() {
     }
 
     // Every word typed must appear somewhere in the item (any field, any order).
-    const terms = saleFilter.trim().toLowerCase().split(/\s+/).filter(Boolean)
+    const terms = searchTerms(saleFilter)
     if (terms.length === 0) {
       return workspace.items
     }
 
-    return workspace.items.filter((item) => {
-      const searchableText = [
-        item.title,
-        item.description,
-        categoryLookup.get(item.category_id ?? -1) ?? 'Uncategorized',
-        item.room,
-        item.condition,
-        item.notes,
-        item.price === null ? '' : `${item.price} ${item.price.toFixed(2)} ${formatCurrency(item.price)}`,
-      ]
-        .join(' ')
-        .toLowerCase()
-
-      return terms.every((term) => searchableText.includes(term))
-    })
+    return workspace.items.filter((item) =>
+      itemMatchesSearch(item, terms, [categoryLookup.get(item.category_id ?? -1) ?? 'Uncategorized']),
+    )
   }, [categoryLookup, saleFilter, workspace])
   const isSearching = saleFilter.trim().length > 0
 
@@ -434,7 +376,7 @@ function App() {
     })
   }, [resetItemEditor])
 
-  const refreshWorkspaceAndDashboard = useCallback(async (preferredSaleId?: number | null): Promise<void> => {
+  const refreshWorkspaceAndDashboard = useCallback(async (preferredSaleId?: number | null): Promise<WorkspaceResponse | null> => {
     setLoading(true)
     setErrorMessage('')
 
@@ -452,17 +394,19 @@ function App() {
       if (resolvedSaleId === null) {
         applyWorkspaceState(null)
         setSelectedSaleId(null)
-        return
+        return null
       }
 
       setShowNewSaleForm(false)
       setSelectedSaleId(resolvedSaleId)
       const nextWorkspace = await getWorkspace(resolvedSaleId)
       applyWorkspaceState(nextWorkspace)
+      return nextWorkspace
     } catch (error) {
       applyWorkspaceState(null)
       setSelectedSaleId(null)
       setErrorMessage(error instanceof Error ? error.message : 'Unable to load the app.')
+      return null
     } finally {
       setLoading(false)
     }
@@ -470,7 +414,9 @@ function App() {
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
-      void refreshWorkspaceAndDashboard()
+      const initialRoute = parseRouteHash(window.location.hash)
+      pendingScrollRef.current = initialRoute.section ? `section-${initialRoute.section}` : null
+      void refreshWorkspaceAndDashboard(initialRoute.saleId)
     }, 0)
 
     return () => {
@@ -791,7 +737,7 @@ function App() {
     })
   }
 
-  function beginEditingItem(item: ItemRead): void {
+  function beginEditingItem(item: ItemRead, categoryName?: string): void {
     resetPricingState()
     setStoredPhotoUrl(getItemPhotoUrl(item))
     setShowItemForm(true)
@@ -799,7 +745,7 @@ function App() {
       id: item.id,
       title: item.title,
       description: item.description,
-      categoryName: categoryLookup.get(item.category_id ?? -1) ?? '',
+      categoryName: categoryName ?? categoryLookup.get(item.category_id ?? -1) ?? '',
       room: item.room,
       condition: item.condition,
       price: item.price === null ? '' : String(item.price),
@@ -861,15 +807,105 @@ function App() {
     URL.revokeObjectURL(url)
   }
 
+  // Keep the address bar in step with what is on screen, so reload and Back keep your place.
+  useEffect(() => {
+    if (loading) {
+      return
+    }
+    const nextHash = buildRouteHash({ view, saleId: selectedSaleId, section: activeSection })
+    if (window.location.hash !== nextHash) {
+      window.history.replaceState(null, '', nextHash)
+    }
+  }, [activeSection, loading, selectedSaleId, view])
+
+  // Scroll once the requested view or section has rendered.
+  useEffect(() => {
+    const target = pendingScrollRef.current
+    if (loading || target === null) {
+      return
+    }
+    if (target === 'top') {
+      pendingScrollRef.current = null
+      window.scrollTo({ top: 0 })
+      return
+    }
+    const element = document.getElementById(target)
+    if (!element) {
+      return
+    }
+    pendingScrollRef.current = null
+    if (element instanceof HTMLDetailsElement) {
+      element.open = true
+    }
+    element.scrollIntoView({ block: 'start' })
+  })
+
+  const applyRoute = useCallback(
+    async (route: AppRoute): Promise<WorkspaceResponse | null> => {
+      setView(route.view)
+      setActiveSection(route.view === 'sales' ? (route.section ?? null) : null)
+      pendingScrollRef.current = route.view === 'sales' && route.section ? `section-${route.section}` : 'top'
+      if (route.view === 'sales' && route.saleId != null && route.saleId !== selectedSaleId) {
+        return refreshWorkspaceAndDashboard(route.saleId)
+      }
+      return workspace
+    },
+    [refreshWorkspaceAndDashboard, selectedSaleId, workspace],
+  )
+
+  useEffect(() => {
+    function handlePopState(): void {
+      void applyRoute(parseRouteHash(window.location.hash))
+    }
+    window.addEventListener('popstate', handlePopState)
+    return () => window.removeEventListener('popstate', handlePopState)
+  }, [applyRoute])
+
+  function navigate(route: AppRoute): Promise<WorkspaceResponse | null> {
+    const nextHash = buildRouteHash(route)
+    if (window.location.hash !== nextHash) {
+      window.history.pushState(null, '', nextHash)
+    }
+    return applyRoute(route)
+  }
+
+  function startAddingItem(): void {
+    void navigate({ view: 'sales', saleId: selectedSaleId, section: 'items' })
+    resetItemEditor(true)
+    pendingScrollRef.current = 'item-editor'
+  }
+
+  async function openItemFromAllItems(item: ItemWithSale): Promise<void> {
+    const loadedWorkspace = await navigate({ view: 'sales', saleId: item.sale_id, section: 'items' })
+    const freshItem = loadedWorkspace?.items.find((candidate) => candidate.id === item.id) ?? item
+    beginEditingItem(freshItem, item.category_name ?? '')
+    pendingScrollRef.current = 'item-editor'
+  }
+
   return (
-    <div className="app-shell">
+    <div className="app-layout">
+      <QuickNav
+        view={view}
+        section={activeSection}
+        saleId={workspace?.sale.id ?? null}
+        saleTitle={workspace?.sale.title ?? null}
+        onNavigate={(route) => void navigate(route)}
+        onAddItem={() => startAddingItem()}
+      />
+    <main className="app-shell">
       <header className="app-header">
         <h1>Muffin Manor Estate Sales</h1>
       </header>
 
       {errorMessage ? <div className="notice error">{errorMessage}</div> : null}
 
-      <section className="surface">
+      {view === 'items' ? (
+        <AllItemsView onOpenItem={(item) => void openItemFromAllItems(item)} onOpenPhoto={setPhotoViewer} />
+      ) : null}
+
+      {view === 'sales' ? (
+      <>
+      <section className="surface" id="section-sales">
         <div className="section-heading">
           <div>
             <h2>Sales</h2>
@@ -981,9 +1017,10 @@ function App() {
 
       {!loading && workspace ? (
         <>
-          <details className="surface" open>
+          <details className="surface" id="section-items" open>
             <summary>Items</summary>
             <div className="details-body">
+              <div className="item-list-block">
               <div className="toolbar">
                 <div className="search-field">
                   <label>
@@ -1046,8 +1083,9 @@ function App() {
                   <p className="empty-copy">No items yet.</p>
                 )}
               </div>
+              </div>
 
-              <div className="section-heading">
+              <div className="section-heading" id="item-editor">
                 <div>
                   <h3>{itemForm.id === null ? 'Add item' : 'Edit item'}</h3>
                   <p>{itemForm.id === null ? 'Hidden until you tap Add item.' : 'Update the selected item below.'}</p>
@@ -1278,7 +1316,7 @@ function App() {
             </div>
           </details>
 
-          <details className="surface">
+          <details className="surface" id="section-tasks">
             <summary>Tasks</summary>
             <div className="details-body">
               <div className="card-list">
@@ -1362,7 +1400,7 @@ function App() {
             </div>
           </details>
 
-          <details className="surface">
+          <details className="surface" id="section-details">
             <summary>Sale details</summary>
             <div className="details-body">
               <form className="stack-form" onSubmit={(event) => void handleUpdateSale(event)}>
@@ -1446,7 +1484,7 @@ function App() {
             </div>
           </details>
 
-          <details className="surface">
+          <details className="surface" id="section-categories">
             <summary>Categories and quick stats</summary>
             <div className="details-body">
               <div className="card-list">
@@ -1549,6 +1587,9 @@ function App() {
           <p className="empty-copy">Create the first sale and the rest of the app will stay simple.</p>
         </section>
       ) : null}
+      </>
+      ) : null}
+    </main>
       {duplicatePrompt ? (
         <div className="modal-backdrop" onClick={() => setDuplicatePrompt(null)}>
           <div

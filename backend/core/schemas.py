@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 
 from sqlmodel import Field, SQLModel
 
@@ -152,6 +152,14 @@ class ItemRead(SQLModel):
     notes: str
     photo_url: str | None
     photo_version: str | None = None
+
+
+class ItemWithSale(ItemRead):
+    """Item returned by the all-items view, with its sale and category names."""
+
+    sale_title: str
+    category_name: str | None = None
+    created_at: datetime
 
 
 class TaskCreate(SQLModel):
