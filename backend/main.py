@@ -5,13 +5,15 @@ from __future__ import annotations
 import json
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
+from datetime import datetime, timezone
+
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import Session, select
 
 from backend.config.database import close_db, database, get_db
 from backend.config.settings import get_logger, get_settings
-from backend.core.models import Category, Item, Sale, Task
+from backend.core.models import Category, Item, ItemPhoto, Sale, Task
 from backend.core.pricing import (
     PricingConfigurationError,
     PricingEstimateService,
@@ -39,6 +41,9 @@ from backend.core.schemas import (
 
 LOGGER = get_logger(__name__)
 SETTINGS = get_settings()
+
+ALLOWED_PHOTO_TYPES = {"image/jpeg", "image/png", "image/webp"}
+MAX_ITEM_PHOTO_BYTES = 1024 * 1024
 
 
 @asynccontextmanager
@@ -121,6 +126,30 @@ def load_workspace_records(
     items = session.exec(select(Item).where(Item.sale_id == sale_id).order_by(Item.created_at.desc())).all()
     tasks = session.exec(select(Task).where(Task.sale_id == sale_id).order_by(Task.status, Task.due_date)).all()
     return sale, categories, items, tasks
+
+
+def photo_version_for(updated_at: datetime) -> str:
+    """Turn a photo timestamp into a short cache-busting version string."""
+
+    return updated_at.strftime("%Y%m%d%H%M%S%f")
+
+
+def load_photo_versions(session: Session, item_ids: list[int]) -> dict[int, str]:
+    """Return photo versions for the given items in a single query."""
+
+    if not item_ids:
+        return {}
+    rows = session.exec(
+        select(ItemPhoto.item_id, ItemPhoto.updated_at).where(ItemPhoto.item_id.in_(item_ids))
+    ).all()
+    return {item_id: photo_version_for(updated_at) for item_id, updated_at in rows}
+
+
+def build_item_read(session: Session, item: Item) -> ItemRead:
+    """Serialize one item including its stored photo version."""
+
+    versions = load_photo_versions(session, [item.id]) if item.id is not None else {}
+    return ItemRead.model_validate(item, update={"photo_version": versions.get(item.id)})
 
 
 @app.get("/")
@@ -232,7 +261,8 @@ def read_workspace(sale_id: int, session: Session = Depends(get_db)) -> Workspac
     """Return the full workspace payload for a sale."""
 
     sale, categories, items, tasks = load_workspace_records(session, sale_id)
-    return build_workspace_response(sale, categories, items, tasks)
+    photo_versions = load_photo_versions(session, [item.id for item in items if item.id is not None])
+    return build_workspace_response(sale, categories, items, tasks, photo_versions)
 
 
 @app.get(f"{SETTINGS.api_prefix}/categories", response_model=list[CategoryRead])
@@ -287,7 +317,7 @@ def create_item(payload: ItemCreate, session: Session = Depends(get_db)) -> Item
     session.add(item)
     session.commit()
     session.refresh(item)
-    return ItemRead.model_validate(item)
+    return build_item_read(session, item)
 
 
 @app.patch(f"{SETTINGS.api_prefix}/items/{{item_id}}", response_model=ItemRead)
@@ -308,7 +338,7 @@ def update_item(
     session.add(item)
     session.commit()
     session.refresh(item)
-    return ItemRead.model_validate(item)
+    return build_item_read(session, item)
 
 
 @app.post(f"{SETTINGS.api_prefix}/items/bulk-update", response_model=list[ItemRead])
@@ -334,7 +364,74 @@ def bulk_update_items(
     session.commit()
     for item in updated_items:
         session.refresh(item)
-    return [ItemRead.model_validate(item) for item in updated_items]
+    versions = load_photo_versions(session, [item.id for item in updated_items if item.id is not None])
+    return [
+        ItemRead.model_validate(item, update={"photo_version": versions.get(item.id)})
+        for item in updated_items
+    ]
+
+
+@app.put(f"{SETTINGS.api_prefix}/items/{{item_id}}/photo", response_model=ItemRead)
+def upload_item_photo(
+    item_id: int,
+    photo: UploadFile = File(...),
+    session: Session = Depends(get_db),
+) -> ItemRead:
+    """Store (or replace) the small thumbnail photo for an item."""
+
+    item = get_item_or_404(session, item_id)
+    if photo.content_type not in ALLOWED_PHOTO_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail="Please upload a JPG, PNG, or WEBP image.",
+        )
+
+    image_bytes = photo.file.read(MAX_ITEM_PHOTO_BYTES + 1)
+    if not image_bytes:
+        raise HTTPException(status_code=400, detail="The uploaded image was empty.")
+    if len(image_bytes) > MAX_ITEM_PHOTO_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail="That photo is too large to save. Please use a photo under 1 MB.",
+        )
+
+    item_photo = session.get(ItemPhoto, item_id)
+    if item_photo is None:
+        item_photo = ItemPhoto(item_id=item_id, content_type=photo.content_type, data=image_bytes)
+    else:
+        item_photo.content_type = photo.content_type
+        item_photo.data = image_bytes
+        item_photo.updated_at = datetime.now(timezone.utc)
+    session.add(item_photo)
+    session.commit()
+    return build_item_read(session, item)
+
+
+@app.get(f"{SETTINGS.api_prefix}/items/{{item_id}}/photo")
+def read_item_photo(item_id: int, session: Session = Depends(get_db)) -> Response:
+    """Return the stored photo bytes for an item."""
+
+    item_photo = session.get(ItemPhoto, item_id)
+    if item_photo is None:
+        raise HTTPException(status_code=404, detail="This item has no saved photo.")
+    # The URL carries a ?v=<photo_version> cache buster, so a long cache is safe.
+    return Response(
+        content=item_photo.data,
+        media_type=item_photo.content_type,
+        headers={"Cache-Control": "private, max-age=31536000, immutable"},
+    )
+
+
+@app.delete(f"{SETTINGS.api_prefix}/items/{{item_id}}/photo", response_model=ItemRead)
+def delete_item_photo(item_id: int, session: Session = Depends(get_db)) -> ItemRead:
+    """Remove the stored photo for an item."""
+
+    item = get_item_or_404(session, item_id)
+    item_photo = session.get(ItemPhoto, item_id)
+    if item_photo is not None:
+        session.delete(item_photo)
+        session.commit()
+    return build_item_read(session, item)
 
 
 @app.post(f"{SETTINGS.api_prefix}/tasks", response_model=TaskRead)

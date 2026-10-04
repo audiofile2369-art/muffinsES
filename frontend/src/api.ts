@@ -273,38 +273,86 @@ export async function importLegacyBrowserDataToBackend(): Promise<boolean> {
 
 const MAX_PHOTO_DIMENSION = 1600
 const MAX_UNSCALED_PHOTO_BYTES = 1_500_000
+const ITEM_PHOTO_DIMENSION = 640
+
+/**
+ * Re-encode a photo as a JPEG whose longest side is at most `maxDimension`.
+ * Returns null when the browser cannot decode or draw the image.
+ */
+async function resizePhoto(photo: File, maxDimension: number, quality: number): Promise<File | null> {
+  if (typeof createImageBitmap !== 'function') {
+    return null
+  }
+
+  try {
+    const bitmap = await createImageBitmap(photo)
+    const scale = Math.min(1, maxDimension / Math.max(bitmap.width, bitmap.height))
+    const canvas = document.createElement('canvas')
+    canvas.width = Math.max(1, Math.round(bitmap.width * scale))
+    canvas.height = Math.max(1, Math.round(bitmap.height * scale))
+    const context = canvas.getContext('2d')
+    if (!context) {
+      bitmap.close()
+      return null
+    }
+    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height)
+    bitmap.close()
+
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/jpeg', quality))
+    if (!blob) {
+      return null
+    }
+    return new File([blob], photo.name.replace(/\.[^.]+$/, '') + '.jpg', { type: 'image/jpeg' })
+  } catch {
+    return null
+  }
+}
 
 /**
  * Downscale large phone/tablet photos so the upload stays far below the
  * 4.5 MB serverless request limit. Falls back to the original file.
  */
 async function shrinkPhotoForUpload(photo: File): Promise<File> {
-  if (photo.size <= MAX_UNSCALED_PHOTO_BYTES || typeof createImageBitmap !== 'function') {
+  if (photo.size <= MAX_UNSCALED_PHOTO_BYTES) {
     return photo
   }
+  return (await resizePhoto(photo, MAX_PHOTO_DIMENSION, 0.85)) ?? photo
+}
 
-  try {
-    const bitmap = await createImageBitmap(photo)
-    const scale = Math.min(1, MAX_PHOTO_DIMENSION / Math.max(bitmap.width, bitmap.height))
-    const canvas = document.createElement('canvas')
-    canvas.width = Math.round(bitmap.width * scale)
-    canvas.height = Math.round(bitmap.height * scale)
-    const context = canvas.getContext('2d')
-    if (!context) {
-      bitmap.close()
-      return photo
-    }
-    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height)
-    bitmap.close()
-
-    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.85))
-    if (!blob) {
-      return photo
-    }
-    return new File([blob], photo.name.replace(/\.[^.]+$/, '') + '.jpg', { type: 'image/jpeg' })
-  } catch {
-    return photo
+/** URL of an item's stored thumbnail, or null when none is saved. */
+export function getItemPhotoUrl(item: ItemRead): string | null {
+  if (API_BASE_URL === null || !item.photo_version) {
+    return null
   }
+  return `${API_BASE_URL}/items/${item.id}/photo?v=${encodeURIComponent(item.photo_version)}`
+}
+
+/** Shrink a picked photo to a small thumbnail and store it on the item. */
+export async function uploadItemPhoto(itemId: number, photo: File): Promise<ItemRead> {
+  if (useBrowserDemoMode || API_BASE_URL === null) {
+    throw new Error('Saving item photos needs the live backend/API to be available.')
+  }
+
+  const thumbnail = (await resizePhoto(photo, ITEM_PHOTO_DIMENSION, 0.8)) ?? photo
+  const formData = new FormData()
+  formData.append('photo', thumbnail)
+
+  const response = await fetch(`${API_BASE_URL}/items/${itemId}/photo`, {
+    method: 'PUT',
+    body: formData,
+  })
+
+  if (!response.ok) {
+    const message = await response.text()
+    throw new Error(extractErrorMessage(message, response.status))
+  }
+
+  return (await response.json()) as ItemRead
+}
+
+/** Remove the stored thumbnail from an item. */
+export function deleteItemPhoto(itemId: number): Promise<ItemRead> {
+  return request<ItemRead>(`/items/${itemId}/photo`, { method: 'DELETE' })
 }
 
 export async function estimatePriceFromPhoto(

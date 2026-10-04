@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import date, datetime, timezone
 from enum import StrEnum
 
+from sqlalchemy import DateTime, LargeBinary
 from sqlmodel import Field, SQLModel
 
 
@@ -85,3 +86,20 @@ class Task(SQLModel, table=True):
     due_date: date | None = Field(default=None)
     status: TaskStatus = Field(default=TaskStatus.TODO)
     notes: str = Field(default="")
+
+
+class ItemPhoto(SQLModel, table=True):
+    """Small stored thumbnail for an item, kept in its own table.
+
+    A separate table (rather than a column on Item) lets `create_all` add it
+    to existing databases, which never gain new columns on old tables.
+    """
+
+    item_id: int = Field(primary_key=True, foreign_key="item.id")
+    content_type: str = Field(max_length=40)
+    data: bytes = Field(sa_type=LargeBinary, nullable=False)
+    updated_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_type=DateTime(timezone=True),
+        nullable=False,
+    )

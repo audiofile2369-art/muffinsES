@@ -52,6 +52,8 @@ export interface ItemRead {
   status: ItemStatus
   notes: string
   photo_url: string | null
+  /** Cache-busting version of the stored thumbnail; null/absent when none is saved. */
+  photo_version?: string | null
 }
 
 export interface TaskRead {

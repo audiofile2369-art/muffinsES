@@ -117,14 +117,19 @@ def build_workspace_response(
     categories: list[Category],
     items: list[Item],
     tasks: list[Task],
+    photo_versions: dict[int, str] | None = None,
 ) -> WorkspaceResponse:
     """Build the complete workspace payload consumed by the frontend."""
 
+    versions = photo_versions or {}
     return WorkspaceResponse(
         sale=SaleRead.model_validate(sale),
         summary=build_sale_summary(sale, items, tasks),
         categories=[CategoryRead.model_validate(category) for category in categories],
-        items=[ItemRead.model_validate(item) for item in items],
+        items=[
+            ItemRead.model_validate(item, update={"photo_version": versions.get(item.id)})
+            for item in items
+        ],
         tasks=[TaskRead.model_validate(task) for task in tasks],
         report=build_report_metrics(items, categories),
     )

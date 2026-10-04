@@ -5,14 +5,17 @@ import {
   createItem,
   createSale,
   createTask,
+  deleteItemPhoto,
   estimatePriceFromPhoto,
   getDashboard,
+  getItemPhotoUrl,
   getWorkspace,
   importLegacyBrowserDataToBackend,
   updateCategory,
   updateItem,
   updateSale,
   updateTask,
+  uploadItemPhoto,
 } from './api'
 import './App.css'
 import type {
@@ -221,6 +224,52 @@ function escapeCsvValue(value: string): string {
   return `"${value.replace(/"/g, '""')}"`
 }
 
+interface PhotoViewerState {
+  src: string
+  alt: string
+}
+
+function ItemThumbnail({
+  item,
+  onOpen,
+}: {
+  item: ItemRead
+  onOpen: (photo: PhotoViewerState) => void
+}) {
+  const storedUrl = getItemPhotoUrl(item)
+  const typedUrl = item.photo_url?.trim() || null
+  const [failedSrc, setFailedSrc] = useState<string | null>(null)
+  const candidates = [storedUrl, typedUrl].filter(
+    (url): url is string => Boolean(url) && url !== failedSrc,
+  )
+  const src = candidates[0] ?? null
+  const alt = `Photo of ${item.title}`
+
+  if (!src) {
+    return (
+      <span className="item-thumb item-thumb-placeholder" role="img" aria-label={`No photo for ${item.title}`}>
+        <svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true">
+          <path
+            fill="currentColor"
+            d="M5 4h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Zm0 2v9.6l3.3-3.3a1 1 0 0 1 1.4 0l2.3 2.3 4.3-4.3a1 1 0 0 1 1.4 0L19 11.6V6H5Zm4 3.5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0Z"
+          />
+        </svg>
+      </span>
+    )
+  }
+
+  return (
+    <button
+      type="button"
+      className="item-thumb"
+      aria-label={`View larger photo of ${item.title}`}
+      onClick={() => onOpen({ src, alt })}
+    >
+      <img src={src} alt={alt} loading="lazy" onError={() => setFailedSrc(src)} />
+    </button>
+  )
+}
+
 function App() {
   const [dashboard, setDashboard] = useState<DashboardResponse | null>(null)
   const [workspace, setWorkspace] = useState<WorkspaceResponse | null>(null)
@@ -242,6 +291,9 @@ function App() {
   const [pricingAnswers, setPricingAnswers] = useState('')
   const [pricingLoading, setPricingLoading] = useState(false)
   const [pricingError, setPricingError] = useState('')
+  const [storedPhotoUrl, setStoredPhotoUrl] = useState<string | null>(null)
+  const [removeStoredPhoto, setRemoveStoredPhoto] = useState(false)
+  const [photoViewer, setPhotoViewer] = useState<PhotoViewerState | null>(null)
   const pricingAutofillRef = useRef<PricingAutofill>({})
 
   const categoryLookup = useMemo(() => {
@@ -294,8 +346,25 @@ function App() {
     setPricingAnswers('')
     setPricingError('')
     setPricingLoading(false)
+    setStoredPhotoUrl(null)
+    setRemoveStoredPhoto(false)
     pricingAutofillRef.current = {}
   }, [])
+
+  useEffect(() => {
+    if (!photoViewer) {
+      return
+    }
+
+    function handleKeyDown(event: KeyboardEvent): void {
+      if (event.key === 'Escape') {
+        setPhotoViewer(null)
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [photoViewer])
 
   const resetItemEditor = useCallback(
     (shouldShowForm = false): void => {
@@ -487,6 +556,7 @@ function App() {
 
     setPricingImageFile(file)
     setPricingPreviewUrl(URL.createObjectURL(file))
+    setRemoveStoredPhoto(false)
     setPricingEstimate(null)
     setPricingAnswers('')
     await requestPriceEstimate(file, '')
@@ -577,18 +647,41 @@ function App() {
     await withSavingState(async () => {
       const resolvedCategoryId = await resolveCategoryId(itemForm.categoryName)
 
+      let savedItem: ItemRead
       if (itemForm.id === null) {
-        await createItem({
+        savedItem = await createItem({
           ...buildItemPayload(workspace.sale.id),
           category_id: resolvedCategoryId,
         })
       } else {
-        await updateItem(itemForm.id, buildItemUpdatePayload(workspace.sale.id, resolvedCategoryId))
+        savedItem = await updateItem(itemForm.id, buildItemUpdatePayload(workspace.sale.id, resolvedCategoryId))
       }
 
+      const photoError = await savePickedPhoto(savedItem.id)
       resetItemEditor(false)
       await refreshWorkspaceAndDashboard(workspace.sale.id)
+      if (photoError) {
+        setErrorMessage(photoError)
+      }
     })
+  }
+
+  /**
+   * Store (or remove) the item's thumbnail after the item itself is saved.
+   * Returns an error message instead of throwing so a photo problem never loses the item.
+   */
+  async function savePickedPhoto(itemId: number): Promise<string> {
+    try {
+      if (pricingImageFile) {
+        await uploadItemPhoto(itemId, pricingImageFile)
+      } else if (removeStoredPhoto && storedPhotoUrl !== null) {
+        await deleteItemPhoto(itemId)
+      }
+      return ''
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : 'Unknown error.'
+      return `The item was saved, but its photo could not be saved: ${reason}`
+    }
   }
 
   async function handleTaskSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
@@ -620,6 +713,7 @@ function App() {
 
   function beginEditingItem(item: ItemRead): void {
     resetPricingState()
+    setStoredPhotoUrl(getItemPhotoUrl(item))
     setShowItemForm(true)
     setItemForm({
       id: item.id,
@@ -826,23 +920,21 @@ function App() {
               <div className="card-list">
                 {filteredItems.length ? (
                   filteredItems.map((item) => (
-                    <button
-                      type="button"
-                      key={item.id}
-                      className="list-card"
-                      onClick={() => beginEditingItem(item)}
-                    >
-                      <div>
-                        <strong>{item.title}</strong>
-                        <small>
-                          {categoryLookup.get(item.category_id ?? -1) ?? 'Uncategorized'} · {item.room}
-                        </small>
-                      </div>
-                      <div className="card-meta">
-                        <span className="status-pill">{titleCase(item.status)}</span>
-                        <strong>{item.price === null ? 'Unpriced' : formatCurrency(item.price)}</strong>
-                      </div>
-                    </button>
+                    <div key={item.id} className="list-card item-row">
+                      <ItemThumbnail item={item} onOpen={setPhotoViewer} />
+                      <button type="button" className="item-row-main" onClick={() => beginEditingItem(item)}>
+                        <div>
+                          <strong>{item.title}</strong>
+                          <small>
+                            {categoryLookup.get(item.category_id ?? -1) ?? 'Uncategorized'} · {item.room}
+                          </small>
+                        </div>
+                        <div className="card-meta">
+                          <span className="status-pill">{titleCase(item.status)}</span>
+                          <strong>{item.price === null ? 'Unpriced' : formatCurrency(item.price)}</strong>
+                        </div>
+                      </button>
+                    </div>
                   ))
                 ) : (
                   <p className="empty-copy">No items yet.</p>
@@ -862,7 +954,7 @@ function App() {
               {showItemForm || itemForm.id !== null ? (
                 <form className="stack-form" onSubmit={(event) => void handleItemSubmit(event)}>
                   <div className="photo-field">
-                    <span>Photo for AI pricing</span>
+                    <span>Item photo (also used for AI pricing)</span>
                     <div className="photo-actions">
                       <label className="secondary-button">
                         Take photo
@@ -891,6 +983,25 @@ function App() {
                       alt="Item preview for pricing"
                       className="pricing-preview"
                     />
+                  ) : storedPhotoUrl && !removeStoredPhoto ? (
+                    <div className="stored-photo">
+                      <img
+                        src={storedPhotoUrl}
+                        alt={`Saved photo of ${itemForm.title}`}
+                        className="pricing-preview"
+                      />
+                      <p className="hint-copy">Take or upload a new photo to replace this one.</p>
+                      <button type="button" className="secondary-button" onClick={() => setRemoveStoredPhoto(true)}>
+                        Remove photo
+                      </button>
+                    </div>
+                  ) : storedPhotoUrl && removeStoredPhoto ? (
+                    <div className="stored-photo">
+                      <p className="hint-copy">The saved photo will be removed when you save.</p>
+                      <button type="button" className="secondary-button" onClick={() => setRemoveStoredPhoto(false)}>
+                        Keep photo
+                      </button>
+                    </div>
                   ) : null}
                   {pricingLoading ? <p className="hint-copy">Checking the photo and estimating price...</p> : null}
                   {pricingError ? <div className="notice error">{pricingError}</div> : null}
@@ -1320,6 +1431,20 @@ function App() {
           <h2>No sale selected</h2>
           <p className="empty-copy">Create the first sale and the rest of the app will stay simple.</p>
         </section>
+      ) : null}
+      {photoViewer ? (
+        <div
+          className="photo-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-label={photoViewer.alt}
+          onClick={() => setPhotoViewer(null)}
+        >
+          <img src={photoViewer.src} alt={photoViewer.alt} />
+          <button type="button" className="secondary-button" autoFocus onClick={() => setPhotoViewer(null)}>
+            Close
+          </button>
+        </div>
       ) : null}
     </div>
   )

@@ -142,6 +142,7 @@ class ItemRead(SQLModel):
     status: ItemStatus
     notes: str
     photo_url: str | None
+    photo_version: str | None = None
 
 
 class TaskCreate(SQLModel):
