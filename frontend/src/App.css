@@ -465,3 +465,38 @@ details[open] summary {
   text-decoration: underline;
   cursor: pointer;
 }
+
+.search-field {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.search-field label {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* 16px keeps iOS Safari from zooming in when the search box is focused. */
+.search-field input[type='search'] {
+  font-size: 16px;
+}
+
+.search-count {
+  margin: 12px 0 0;
+}
+
+.empty-search {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+@media (max-width: 520px) {
+  .toolbar .search-field {
+    width: 100%;
+  }
+}

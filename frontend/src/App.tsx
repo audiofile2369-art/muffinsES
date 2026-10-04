@@ -314,6 +314,7 @@ function App() {
   const [photoViewer, setPhotoViewer] = useState<PhotoViewerState | null>(null)
   const [duplicatePrompt, setDuplicatePrompt] = useState<DuplicatePromptState | null>(null)
   const pricingAutofillRef = useRef<PricingAutofill>({})
+  const shownSaleIdRef = useRef<number | null>(null)
 
   const categoryLookup = useMemo(() => {
     const entries: Array<[number, string]> =
@@ -326,18 +327,29 @@ function App() {
       return []
     }
 
-    return workspace.items.filter((item) => {
-      const query = saleFilter.trim().toLowerCase()
-      const matchesQuery =
-        query.length === 0 ||
-        [item.title, item.description, item.notes, item.room]
-          .join(' ')
-          .toLowerCase()
-          .includes(query)
+    // Every word typed must appear somewhere in the item (any field, any order).
+    const terms = saleFilter.trim().toLowerCase().split(/\s+/).filter(Boolean)
+    if (terms.length === 0) {
+      return workspace.items
+    }
 
-      return matchesQuery
+    return workspace.items.filter((item) => {
+      const searchableText = [
+        item.title,
+        item.description,
+        categoryLookup.get(item.category_id ?? -1) ?? 'Uncategorized',
+        item.room,
+        item.condition,
+        item.notes,
+        item.price === null ? '' : `${item.price} ${item.price.toFixed(2)} ${formatCurrency(item.price)}`,
+      ]
+        .join(' ')
+        .toLowerCase()
+
+      return terms.every((term) => searchableText.includes(term))
     })
-  }, [saleFilter, workspace])
+  }, [categoryLookup, saleFilter, workspace])
+  const isSearching = saleFilter.trim().length > 0
 
   const roomOptions = useMemo(() => {
     const rooms = workspace?.items.map((item) => item.room.trim()).filter(Boolean) ?? []
@@ -400,7 +412,12 @@ function App() {
     resetItemEditor(false)
     setTaskForm(createEmptyTaskForm())
     setCategoryForm(createEmptyCategoryForm())
-    setSaleFilter('')
+    // Keep the search while working in one sale; start fresh when the sale changes.
+    const nextSaleId = nextWorkspace?.sale.id ?? null
+    if (nextSaleId !== shownSaleIdRef.current) {
+      shownSaleIdRef.current = nextSaleId
+      setSaleFilter('')
+    }
 
     if (nextWorkspace === null) {
       setSaleEditor(createEmptySaleForm())
@@ -968,19 +985,33 @@ function App() {
             <summary>Items</summary>
             <div className="details-body">
               <div className="toolbar">
-                <label>
-                  Search items
-                  <input
-                    type="search"
-                    placeholder="Search items"
-                    value={saleFilter}
-                    onChange={(event) => setSaleFilter(event.target.value)}
-                  />
-                </label>
+                <div className="search-field">
+                  <label>
+                    Search items
+                    <input
+                      type="search"
+                      placeholder="Search items"
+                      autoComplete="off"
+                      value={saleFilter}
+                      onChange={(event) => setSaleFilter(event.target.value)}
+                    />
+                  </label>
+                  {isSearching ? (
+                    <button type="button" className="secondary-button" onClick={() => setSaleFilter('')}>
+                      Clear
+                    </button>
+                  ) : null}
+                </div>
                 <button type="button" className="secondary-button" onClick={() => downloadItemsCsv()}>
                   Export CSV
                 </button>
               </div>
+
+              {isSearching ? (
+                <p className="hint-copy search-count" aria-live="polite">
+                  {filteredItems.length} of {workspace.items.length} items
+                </p>
+              ) : null}
 
               <div className="card-list">
                 {filteredItems.length ? (
@@ -1004,6 +1035,13 @@ function App() {
                       </button>
                     </div>
                   ))
+                ) : isSearching && workspace.items.length > 0 ? (
+                  <div className="empty-search">
+                    <p className="empty-copy">No items match &ldquo;{saleFilter.trim()}&rdquo;</p>
+                    <button type="button" className="secondary-button" onClick={() => setSaleFilter('')}>
+                      Clear search
+                    </button>
+                  </div>
                 ) : (
                   <p className="empty-copy">No items yet.</p>
                 )}
