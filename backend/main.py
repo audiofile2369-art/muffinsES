@@ -11,7 +11,6 @@ from sqlmodel import Session, select
 
 from backend.config.database import close_db, database, get_db
 from backend.config.settings import get_logger, get_settings
-from backend.core.bootstrap import initialize_database
 from backend.core.models import Category, Item, Sale, Task
 from backend.core.pricing import (
     PricingConfigurationError,
@@ -47,8 +46,6 @@ async def lifespan(_: FastAPI):
     """Initialize and close backend resources."""
 
     database.create_tables()
-    with database.get_session() as session:
-        initialize_database(session)
     yield
     close_db()
 
