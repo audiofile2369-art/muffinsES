@@ -985,3 +985,15 @@ details[open] summary {
     grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
   }
 }
+
+.list-card.item-row.is-editing {
+  outline: 2px solid #8b5cf6;
+  outline-offset: -2px;
+}
+
+.item-inline-editor {
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  scroll-margin-top: 80px;
+}
