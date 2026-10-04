@@ -7,6 +7,7 @@ import json
 import os
 from dataclasses import dataclass
 
+import httpx
 import openai
 from openai import OpenAI
 
@@ -70,7 +71,7 @@ def clean_api_key(raw_value: str) -> str:
         value = value.split("=", 1)[1].strip()
     if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
         value = value[1:-1].strip()
-    return value
+    return "".join(value.split())
 
 
 @dataclass
@@ -92,6 +93,11 @@ class PricingEstimateService:
         if not api_key:
             raise PricingConfigurationError(
                 'AI pricing is not configured yet. Set OPENAI_API_KEY for hosted deployments or add an OpenAI key to "open api.txt" for local runs.'
+            )
+
+        if not api_key.isascii():
+            raise PricingConfigurationError(
+                "The OpenAI API key is malformed (it contains unexpected characters). Paste it again as OPENAI_API_KEY."
             )
 
         client = OpenAI(api_key=api_key, timeout=OPENAI_TIMEOUT_SECONDS, max_retries=1)
@@ -193,6 +199,11 @@ class PricingEstimateService:
             raise PricingServiceError("The AI took too long to respond. Try again.", status_code=504) from error
         except openai.APIConnectionError as error:
             LOGGER.error("Could not reach OpenAI: %s", error)
+            if isinstance(error.__cause__, httpx.LocalProtocolError):
+                raise PricingServiceError(
+                    "The OpenAI API key is malformed (it contains characters that cannot be sent). Paste it again as OPENAI_API_KEY.",
+                    status_code=503,
+                ) from error
             raise PricingServiceError("Could not reach OpenAI. Try again.", status_code=502) from error
         except openai.APIStatusError as error:
             LOGGER.error("OpenAI request failed: %s %s", error.status_code, _error_code(error))
