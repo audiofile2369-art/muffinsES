@@ -156,6 +156,18 @@ export function updateItem(itemId: number, payload: ItemUpdatePayload): Promise<
   })
 }
 
+/** Add `amount` more of an existing item without resending (and overwriting) the rest of it. */
+export function incrementItemQuantity(itemId: number, amount: number): Promise<ItemRead> {
+  if (useBrowserDemoMode) {
+    return mockApi.incrementItemQuantity(itemId, amount)
+  }
+
+  return request<ItemRead>(`/items/${itemId}/quantity/increment`, {
+    method: 'POST',
+    body: JSON.stringify({ amount }),
+  })
+}
+
 export function bulkUpdateItems(payload: BulkItemUpdatePayload): Promise<ItemRead[]> {
   if (useBrowserDemoMode) {
     return mockApi.bulkUpdateItems(payload)
@@ -245,6 +257,7 @@ export async function importLegacyBrowserDataToBackend(): Promise<boolean> {
       room: item.room,
       condition: item.condition,
       price: item.price,
+      quantity: item.quantity ?? 1,
       status: item.status,
       notes: item.notes,
       photo_url: item.photo_url,

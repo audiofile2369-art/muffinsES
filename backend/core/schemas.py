@@ -101,6 +101,7 @@ class ItemCreate(SQLModel):
     room: str = Field(default="General", max_length=80)
     condition: str = Field(default="Good", max_length=80)
     price: float | None = Field(default=None, ge=0)
+    quantity: int = Field(default=1, ge=1)
     status: ItemStatus = Field(default=ItemStatus.AVAILABLE)
     notes: str = Field(default="")
     photo_url: str | None = Field(default=None, max_length=500)
@@ -115,9 +116,16 @@ class ItemUpdate(SQLModel):
     room: str = Field(default="General", max_length=80)
     condition: str = Field(default="Good", max_length=80)
     price: float | None = Field(default=None, ge=0)
+    quantity: int = Field(default=1, ge=1)
     status: ItemStatus = Field(default=ItemStatus.AVAILABLE)
     notes: str = Field(default="")
     photo_url: str | None = Field(default=None, max_length=500)
+
+
+class ItemQuantityIncrement(SQLModel):
+    """Payload for adding more of an item that is already listed."""
+
+    amount: int = Field(default=1, ge=1, le=10000)
 
 
 class BulkItemUpdate(SQLModel):
@@ -139,6 +147,7 @@ class ItemRead(SQLModel):
     room: str
     condition: str
     price: float | None
+    quantity: int = 1
     status: ItemStatus
     notes: str
     photo_url: str | None

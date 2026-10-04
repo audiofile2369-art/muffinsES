@@ -192,3 +192,80 @@ def test_item_photo_rejects_bad_type_large_files_and_missing_items() -> None:
         assert missing_item.status_code == 404
         assert client.delete("/api/items/999999/photo").status_code == 404
         assert client.get(f"/api/items/{item_id}/photo").status_code == 404
+
+
+def test_item_quantity_defaults_increments_and_counts_in_totals() -> None:
+    """Quantity defaults to 1, increments in place, and multiplies item value in totals."""
+
+    with TestClient(app) as client:
+        sale_id = client.post(
+            "/api/sales",
+            json={"title": "Quantity Sale", "start_date": "2026-09-01", "end_date": "2026-09-02"},
+        ).json()["id"]
+        chair = client.post("/api/items", json={"sale_id": sale_id, "title": "Dining chair", "price": 20})
+        assert chair.status_code == 200
+        assert chair.json()["quantity"] == 1
+        chair_id = chair.json()["id"]
+        client.post(
+            "/api/items",
+            json={"sale_id": sale_id, "title": "Vase", "price": 5, "quantity": 3, "status": "sold"},
+        )
+
+        bumped = client.post(f"/api/items/{chair_id}/quantity/increment", json={"amount": 2})
+        assert bumped.status_code == 200
+        assert bumped.json()["quantity"] == 3
+        assert bumped.json()["title"] == "Dining chair"
+        assert client.post(f"/api/items/{chair_id}/quantity/increment", json={}).json()["quantity"] == 4
+        assert client.post(f"/api/items/{chair_id}/quantity/increment", json={"amount": 0}).status_code == 422
+        assert client.post("/api/items/999999/quantity/increment", json={"amount": 1}).status_code == 404
+        assert client.post("/api/items", json={"sale_id": sale_id, "title": "Bad", "quantity": 0}).status_code == 422
+
+        edited = client.patch(f"/api/items/{chair_id}", json={"title": "Dining chair", "price": 20})
+        assert edited.json()["quantity"] == 4
+
+        workspace = client.get(f"/api/sales/{sale_id}/workspace").json()
+        assert len(workspace["items"]) == 2
+        report = workspace["report"]
+        assert report["total_listed_value"] == 4 * 20 + 3 * 5
+        assert report["total_sold_value"] == 3 * 5
+        assert workspace["summary"]["estimated_revenue"] == 95
+        assert workspace["summary"]["realized_revenue"] == 15
+
+
+def test_quantity_migration_adds_column_to_old_item_table(tmp_path: Path) -> None:
+    """An item table created before `quantity` existed gains it with value 1, keeping rows."""
+
+    import sqlite3
+
+    from sqlmodel import create_engine
+
+    from backend.config.database import ensure_item_quantity_column
+
+    db_path = tmp_path / "old.db"
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            "CREATE TABLE item (id INTEGER PRIMARY KEY, sale_id INTEGER NOT NULL, title VARCHAR NOT NULL, price FLOAT)"
+        )
+        connection.execute("INSERT INTO item (id, sale_id, title, price) VALUES (1, 1, 'Old lamp', 12.5)")
+
+    engine = create_engine(f"sqlite:///{db_path}")
+    try:
+        assert ensure_item_quantity_column(engine) is True
+        assert ensure_item_quantity_column(engine) is False
+    finally:
+        engine.dispose()
+
+    with sqlite3.connect(db_path) as connection:
+        rows = connection.execute("SELECT id, title, price, quantity FROM item").fetchall()
+    assert rows == [(1, "Old lamp", 12.5, 1)]
+
+
+def test_quantity_migration_never_raises() -> None:
+    """A broken database connection must not crash startup."""
+
+    from sqlmodel import create_engine
+
+    from backend.config.database import ensure_item_quantity_column
+
+    engine = create_engine("sqlite:///Z:/definitely/missing/dir/nope.db")
+    assert ensure_item_quantity_column(engine) is False

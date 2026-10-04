@@ -49,6 +49,7 @@ export interface ItemRead {
   room: string
   condition: string
   price: number | null
+  quantity: number
   status: ItemStatus
   notes: string
   photo_url: string | null
@@ -122,6 +123,7 @@ export interface ItemPayload {
   room: string
   condition: string
   price: number | null
+  quantity: number
   status: ItemStatus
   notes: string
   photo_url: string | null

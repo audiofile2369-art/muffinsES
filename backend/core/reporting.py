@@ -18,6 +18,12 @@ from backend.core.schemas import (
 )
 
 
+def item_value(item: Item) -> float:
+    """Listed value of an item line: unit price times quantity."""
+
+    return (item.price or 0.0) * (item.quantity or 1)
+
+
 def build_sale_summary(sale: Sale, items: list[Item], tasks: list[Task]) -> SaleSummary:
     """Build dashboard metrics for a single sale."""
 
@@ -36,8 +42,8 @@ def build_sale_summary(sale: Sale, items: list[Item], tasks: list[Task]) -> Sale
         priced_count=len(priced_items),
         sold_count=len(sold_items),
         pending_task_count=len(pending_tasks),
-        estimated_revenue=round(sum(item.price or 0 for item in items), 2),
-        realized_revenue=round(sum(item.price or 0 for item in sold_items), 2),
+        estimated_revenue=round(sum(item_value(item) for item in items), 2),
+        realized_revenue=round(sum(item_value(item) for item in sold_items), 2),
     )
 
 
@@ -56,13 +62,13 @@ def build_report_metrics(items: list[Item], categories: list[Category]) -> Repor
         category_name = category_lookup.get(item.category_id, "Uncategorized")
         room_name = item.room or "General"
         category_rollups[category_name]["item_count"] += 1
-        category_rollups[category_name]["listed_value"] += item.price or 0.0
+        category_rollups[category_name]["listed_value"] += item_value(item)
         room_rollups[room_name]["item_count"] += 1
-        room_rollups[room_name]["listed_value"] += item.price or 0.0
+        room_rollups[room_name]["listed_value"] += item_value(item)
 
         if item.status == ItemStatus.SOLD:
             category_rollups[category_name]["sold_count"] += 1
-            category_rollups[category_name]["sold_value"] += item.price or 0.0
+            category_rollups[category_name]["sold_value"] += item_value(item)
 
     category_breakdown = [
         CategoryBreakdown(
@@ -94,9 +100,9 @@ def build_report_metrics(items: list[Item], categories: list[Category]) -> Repor
     total_items = len(items)
     priced_items = len([item for item in items if item.price is not None])
     sold_items = len([item for item in items if item.status == ItemStatus.SOLD])
-    total_listed_value = round(sum(item.price or 0 for item in items), 2)
+    total_listed_value = round(sum(item_value(item) for item in items), 2)
     total_sold_value = round(
-        sum(item.price or 0 for item in items if item.status == ItemStatus.SOLD), 2
+        sum(item_value(item) for item in items if item.status == ItemStatus.SOLD), 2
     )
     sell_through_rate = round((sold_items / total_items) * 100, 1) if total_items else 0.0
 

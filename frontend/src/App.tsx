@@ -11,6 +11,7 @@ import {
   getItemPhotoUrl,
   getWorkspace,
   importLegacyBrowserDataToBackend,
+  incrementItemQuantity,
   updateCategory,
   updateItem,
   updateSale,
@@ -59,6 +60,7 @@ interface ItemFormState {
   room: string
   condition: string
   price: string
+  quantity: string
   status: ItemStatus
   notes: string
   photoUrl: string
@@ -161,6 +163,7 @@ function createEmptyItemForm(): ItemFormState {
     room: 'General',
     condition: 'Good',
     price: '',
+    quantity: '1',
     status: 'available',
     notes: '',
     photoUrl: '',
@@ -220,8 +223,23 @@ function resolveSelectedSaleId(
   return sales[0]?.id ?? null
 }
 
+/** Item names compared for duplicates: trimmed, case-insensitive, single spaces. */
+function normalizeItemName(value: string): string {
+  return value.trim().replace(/\s+/g, ' ').toLowerCase()
+}
+
+function parseQuantity(value: string): number {
+  const parsed = Math.floor(Number(value))
+  return Number.isFinite(parsed) && parsed >= 1 ? parsed : 1
+}
+
 function escapeCsvValue(value: string): string {
   return `"${value.replace(/"/g, '""')}"`
+}
+
+interface DuplicatePromptState {
+  existing: ItemRead
+  amount: number
 }
 
 interface PhotoViewerState {
@@ -294,6 +312,7 @@ function App() {
   const [storedPhotoUrl, setStoredPhotoUrl] = useState<string | null>(null)
   const [removeStoredPhoto, setRemoveStoredPhoto] = useState(false)
   const [photoViewer, setPhotoViewer] = useState<PhotoViewerState | null>(null)
+  const [duplicatePrompt, setDuplicatePrompt] = useState<DuplicatePromptState | null>(null)
   const pricingAutofillRef = useRef<PricingAutofill>({})
 
   const categoryLookup = useMemo(() => {
@@ -352,19 +371,20 @@ function App() {
   }, [])
 
   useEffect(() => {
-    if (!photoViewer) {
+    if (!photoViewer && !duplicatePrompt) {
       return
     }
 
     function handleKeyDown(event: KeyboardEvent): void {
       if (event.key === 'Escape') {
         setPhotoViewer(null)
+        setDuplicatePrompt(null)
       }
     }
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [photoViewer])
+  }, [photoViewer, duplicatePrompt])
 
   const resetItemEditor = useCallback(
     (shouldShowForm = false): void => {
@@ -474,6 +494,7 @@ function App() {
       room: itemForm.room.trim() || 'General',
       condition: itemForm.condition.trim() || 'Good',
       price: itemForm.price.trim().length > 0 ? Number(itemForm.price) : null,
+      quantity: parseQuantity(itemForm.quantity),
       status: itemForm.status,
       notes: itemForm.notes.trim(),
       photo_url: itemForm.photoUrl.trim() || null,
@@ -489,6 +510,7 @@ function App() {
       room: payload.room,
       condition: payload.condition,
       price: payload.price,
+      quantity: payload.quantity,
       status: payload.status,
       notes: payload.notes,
       photo_url: payload.photo_url,
@@ -644,6 +666,47 @@ function App() {
       return
     }
 
+    if (itemForm.id === null) {
+      const newName = normalizeItemName(itemForm.title)
+      const existing = workspace.items.find((item) => normalizeItemName(item.title) === newName)
+      if (newName && existing) {
+        setDuplicatePrompt({ existing, amount: parseQuantity(itemForm.quantity) })
+        return
+      }
+    }
+
+    await saveItem()
+  }
+
+  async function handleDuplicateAddToQuantity(): Promise<void> {
+    if (!workspace || !duplicatePrompt) {
+      return
+    }
+
+    const { existing, amount } = duplicatePrompt
+    setDuplicatePrompt(null)
+    await withSavingState(async () => {
+      await incrementItemQuantity(existing.id, amount)
+      resetItemEditor(false)
+      await refreshWorkspaceAndDashboard(workspace.sale.id)
+    })
+  }
+
+  function handleDuplicateMistake(): void {
+    setDuplicatePrompt(null)
+    resetItemEditor(false)
+  }
+
+  async function handleDuplicateAddSeparately(): Promise<void> {
+    setDuplicatePrompt(null)
+    await saveItem()
+  }
+
+  async function saveItem(): Promise<void> {
+    if (!workspace) {
+      return
+    }
+
     await withSavingState(async () => {
       const resolvedCategoryId = await resolveCategoryId(itemForm.categoryName)
 
@@ -723,6 +786,7 @@ function App() {
       room: item.room,
       condition: item.condition,
       price: item.price === null ? '' : String(item.price),
+      quantity: String(item.quantity ?? 1),
       status: item.status,
       notes: item.notes,
       photoUrl: item.photo_url ?? '',
@@ -754,13 +818,14 @@ function App() {
     }
 
     const rows = [
-      ['Title', 'Category', 'Room', 'Condition', 'Price', 'Status', 'Description', 'Notes'],
+      ['Title', 'Category', 'Room', 'Condition', 'Price', 'Quantity', 'Status', 'Description', 'Notes'],
       ...filteredItems.map((item) => [
         item.title,
         categoryLookup.get(item.category_id ?? -1) ?? 'Uncategorized',
         item.room,
         item.condition,
         item.price === null ? '' : String(item.price),
+        String(item.quantity ?? 1),
         item.status,
         item.description,
         item.notes,
@@ -931,7 +996,10 @@ function App() {
                         </div>
                         <div className="card-meta">
                           <span className="status-pill">{titleCase(item.status)}</span>
-                          <strong>{item.price === null ? 'Unpriced' : formatCurrency(item.price)}</strong>
+                          <strong>
+                            {item.price === null ? 'Unpriced' : formatCurrency(item.price)}
+                            {(item.quantity ?? 1) > 1 ? <span className="quantity-badge"> × {item.quantity}</span> : null}
+                          </strong>
                         </div>
                       </button>
                     </div>
@@ -1090,6 +1158,17 @@ function App() {
                         step="0.01"
                         value={itemForm.price}
                         onChange={(event) => setItemForm((current) => ({ ...current, price: event.target.value }))}
+                      />
+                    </label>
+                    <label>
+                      Quantity
+                      <input
+                        type="number"
+                        min="1"
+                        step="1"
+                        inputMode="numeric"
+                        value={itemForm.quantity}
+                        onChange={(event) => setItemForm((current) => ({ ...current, quantity: event.target.value }))}
                       />
                     </label>
                     <label>
@@ -1432,6 +1511,60 @@ function App() {
           <p className="empty-copy">Create the first sale and the rest of the app will stay simple.</p>
         </section>
       ) : null}
+      {duplicatePrompt ? (
+        <div className="modal-backdrop" onClick={() => setDuplicatePrompt(null)}>
+          <div
+            className="modal-card"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="duplicate-title"
+            aria-describedby="duplicate-body"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="duplicate-summary">
+              {getItemPhotoUrl(duplicatePrompt.existing) || duplicatePrompt.existing.photo_url ? (
+                <img
+                  className="duplicate-thumb"
+                  src={getItemPhotoUrl(duplicatePrompt.existing) ?? duplicatePrompt.existing.photo_url ?? ''}
+                  alt={`Photo of ${duplicatePrompt.existing.title}`}
+                />
+              ) : null}
+              <div>
+                <h3 id="duplicate-title">Already added?</h3>
+                <p id="duplicate-body">
+                  You already added &ldquo;{duplicatePrompt.existing.title}&rdquo; to this sale (qty{' '}
+                  {duplicatePrompt.existing.quantity ?? 1}
+                  {duplicatePrompt.existing.price === null
+                    ? ', unpriced'
+                    : `, ${formatCurrency(duplicatePrompt.existing.price)}`}
+                  ).
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              className="primary-button"
+              autoFocus
+              disabled={saving}
+              onClick={() => void handleDuplicateAddToQuantity()}
+            >
+              It&rsquo;s another one &mdash; add {duplicatePrompt.amount} to quantity
+            </button>
+            <button type="button" className="secondary-button" onClick={() => handleDuplicateMistake()}>
+              It&rsquo;s a mistake &mdash; don&rsquo;t add
+            </button>
+            <button
+              type="button"
+              className="link-button"
+              disabled={saving}
+              onClick={() => void handleDuplicateAddSeparately()}
+            >
+              Add as a separate item
+            </button>
+          </div>
+        </div>
+      ) : null}
+
       {photoViewer ? (
         <div
           className="photo-overlay"

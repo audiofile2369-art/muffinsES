@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import update
 from sqlmodel import Session, select
 
 from backend.config.database import close_db, database, get_db
@@ -28,6 +29,7 @@ from backend.core.schemas import (
     DashboardResponse,
     ItemCreate,
     PricingEstimateResponse,
+    ItemQuantityIncrement,
     ItemRead,
     ItemUpdate,
     SaleCreate,
@@ -337,6 +339,28 @@ def update_item(
         setattr(item, field_name, value)
     session.add(item)
     session.commit()
+    session.refresh(item)
+    return build_item_read(session, item)
+
+
+@app.post(f"{SETTINGS.api_prefix}/items/{{item_id}}/quantity/increment", response_model=ItemRead)
+def increment_item_quantity(
+    item_id: int,
+    payload: ItemQuantityIncrement,
+    session: Session = Depends(get_db),
+) -> ItemRead:
+    """Add more of an already-listed item without touching its other fields.
+
+    Done as one `quantity = quantity + amount` UPDATE so concurrent taps or a
+    stale browser copy of the item can never overwrite other changes.
+    """
+
+    get_item_or_404(session, item_id)
+    session.exec(
+        update(Item).where(Item.id == item_id).values(quantity=Item.quantity + payload.amount)
+    )
+    session.commit()
+    item = get_item_or_404(session, item_id)
     session.refresh(item)
     return build_item_read(session, item)
 

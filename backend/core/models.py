@@ -71,6 +71,8 @@ class Item(SQLModel, table=True):
     room: str = Field(default="General", max_length=80)
     condition: str = Field(default="Good", max_length=80)
     price: float | None = Field(default=None, ge=0)
+    # Existing databases get this column from `ensure_item_quantity_column`.
+    quantity: int = Field(default=1, ge=1, sa_column_kwargs={"server_default": "1"})
     status: ItemStatus = Field(default=ItemStatus.AVAILABLE)
     notes: str = Field(default="")
     photo_url: str | None = Field(default=None, max_length=500)

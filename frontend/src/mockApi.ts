@@ -113,6 +113,11 @@ function sortCategories(categories: CategoryRead[]): CategoryRead[] {
   })
 }
 
+/** Listed value of an item line: unit price times quantity. */
+function itemValue(item: ItemRead): number {
+  return (item.price ?? 0) * (item.quantity ?? 1)
+}
+
 function buildSaleSummary(sale: SaleRead, state: MockState): SaleSummary {
   const saleItems = state.items.filter((item) => item.sale_id === sale.id)
   const saleTasks = state.tasks.filter((task) => task.sale_id === sale.id)
@@ -127,10 +132,10 @@ function buildSaleSummary(sale: SaleRead, state: MockState): SaleSummary {
     sold_count: soldItems.length,
     pending_task_count: pendingTaskCount,
     estimated_revenue: Number(
-      saleItems.reduce((sum, item) => sum + (item.price ?? 0), 0).toFixed(2),
+      saleItems.reduce((sum, item) => sum + itemValue(item), 0).toFixed(2),
     ),
     realized_revenue: Number(
-      soldItems.reduce((sum, item) => sum + (item.price ?? 0), 0).toFixed(2),
+      soldItems.reduce((sum, item) => sum + itemValue(item), 0).toFixed(2),
     ),
   }
 }
@@ -154,16 +159,16 @@ function buildReport(saleId: number, state: MockState): ReportMetrics {
       soldValue: 0,
     }
     categoryEntry.itemCount += 1
-    categoryEntry.listedValue += item.price ?? 0
+    categoryEntry.listedValue += itemValue(item)
     if (item.status === 'sold') {
       categoryEntry.soldCount += 1
-      categoryEntry.soldValue += item.price ?? 0
+      categoryEntry.soldValue += itemValue(item)
     }
     categoryMap.set(categoryName, categoryEntry)
 
     const roomEntry = roomMap.get(roomName) ?? { itemCount: 0, listedValue: 0 }
     roomEntry.itemCount += 1
-    roomEntry.listedValue += item.price ?? 0
+    roomEntry.listedValue += itemValue(item)
     roomMap.set(roomName, roomEntry)
   }
 
@@ -188,9 +193,9 @@ function buildReport(saleId: number, state: MockState): ReportMetrics {
     }))
     .sort((left, right) => right.listed_value - left.listed_value)
 
-  const totalListedValue = saleItems.reduce((sum, item) => sum + (item.price ?? 0), 0)
+  const totalListedValue = saleItems.reduce((sum, item) => sum + itemValue(item), 0)
   const soldItems = saleItems.filter((item) => item.status === 'sold')
-  const totalSoldValue = soldItems.reduce((sum, item) => sum + (item.price ?? 0), 0)
+  const totalSoldValue = soldItems.reduce((sum, item) => sum + itemValue(item), 0)
 
   return {
     total_items: saleItems.length,
@@ -309,6 +314,18 @@ export async function updateItem(itemId: number, payload: ItemUpdatePayload): Pr
   }
 
   Object.assign(item, payload)
+  saveState(state)
+  return item
+}
+
+export async function incrementItemQuantity(itemId: number, amount: number): Promise<ItemRead> {
+  const state = loadState()
+  const item = state.items.find((currentItem) => currentItem.id === itemId)
+  if (!item) {
+    throw new Error('Item not found.')
+  }
+
+  item.quantity = (item.quantity ?? 1) + amount
   saveState(state)
   return item
 }
