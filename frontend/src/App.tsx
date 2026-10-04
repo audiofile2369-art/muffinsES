@@ -483,6 +483,7 @@ function App() {
     if (!file) {
       return
     }
+    event.currentTarget.value = ''
 
     setPricingImageFile(file)
     setPricingPreviewUrl(URL.createObjectURL(file))
@@ -860,15 +861,30 @@ function App() {
 
               {showItemForm || itemForm.id !== null ? (
                 <form className="stack-form" onSubmit={(event) => void handleItemSubmit(event)}>
-                  <label>
-                    Photo for AI pricing
-                    <input
-                      type="file"
-                      accept="image/png,image/jpeg,image/webp"
-                      capture="environment"
-                      onChange={(event) => void handlePhotoSelected(event)}
-                    />
-                  </label>
+                  <div className="photo-field">
+                    <span>Photo for AI pricing</span>
+                    <div className="photo-actions">
+                      <label className="secondary-button">
+                        Take photo
+                        <input
+                          type="file"
+                          accept="image/*"
+                          capture="environment"
+                          hidden
+                          onChange={(event) => void handlePhotoSelected(event)}
+                        />
+                      </label>
+                      <label className="secondary-button">
+                        Upload photo
+                        <input
+                          type="file"
+                          accept="image/png,image/jpeg,image/webp"
+                          hidden
+                          onChange={(event) => void handlePhotoSelected(event)}
+                        />
+                      </label>
+                    </div>
+                  </div>
                   {pricingPreviewUrl ? (
                     <img
                       src={pricingPreviewUrl}
