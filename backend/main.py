@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
@@ -12,7 +13,11 @@ from backend.config.database import close_db, database, get_db
 from backend.config.settings import get_logger, get_settings
 from backend.core.bootstrap import initialize_database
 from backend.core.models import Category, Item, Sale, Task
-from backend.core.pricing import PricingConfigurationError, PricingEstimateService
+from backend.core.pricing import (
+    PricingConfigurationError,
+    PricingEstimateService,
+    PricingServiceError,
+)
 from backend.core.reporting import build_sale_summary, build_workspace_response
 from backend.core.schemas import (
     BulkItemUpdate,
@@ -56,6 +61,20 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def _parse_category_names(raw_value: str) -> list[str]:
+    """Parse a JSON array (or comma-separated list) of category names from a form field."""
+
+    if not raw_value.strip():
+        return []
+    try:
+        parsed = json.loads(raw_value)
+    except json.JSONDecodeError:
+        parsed = raw_value.split(",")
+    if not isinstance(parsed, list):
+        return []
+    return [str(name).strip() for name in parsed if str(name).strip()]
 
 
 def get_sale_or_404(session: Session, sale_id: int) -> Sale:
@@ -125,14 +144,19 @@ def read_health() -> dict[str, str]:
     f"{SETTINGS.api_prefix}/pricing/estimate",
     response_model=PricingEstimateResponse,
 )
-async def estimate_item_price(
+def estimate_item_price(
     photo: UploadFile = File(...),
     category_hint: str = Form(default=""),
     room_hint: str = Form(default=""),
     notes: str = Form(default=""),
     follow_up_answers: str = Form(default=""),
+    categories: str = Form(default=""),
 ) -> PricingEstimateResponse:
-    """Estimate an item price from a photo and optional follow-up answers."""
+    """Estimate an item price and form details from a photo.
+
+    Runs as a sync route so the blocking OpenAI call happens in the threadpool.
+    `categories` is an optional JSON array of the sale's category names.
+    """
 
     if photo.content_type not in {"image/jpeg", "image/png", "image/webp"}:
         raise HTTPException(
@@ -140,7 +164,7 @@ async def estimate_item_price(
             detail="Please upload a JPG, PNG, or WEBP image.",
         )
 
-    image_bytes = await photo.read()
+    image_bytes = photo.file.read()
     if not image_bytes:
         raise HTTPException(status_code=400, detail="The uploaded image was empty.")
 
@@ -153,9 +177,12 @@ async def estimate_item_price(
             room_hint=room_hint,
             notes=notes,
             follow_up_answers=follow_up_answers,
+            categories=_parse_category_names(categories),
         )
     except PricingConfigurationError as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
+    except PricingServiceError as error:
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
     except ValueError as error:
         raise HTTPException(status_code=502, detail=str(error)) from error
 

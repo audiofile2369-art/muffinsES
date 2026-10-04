@@ -222,6 +222,8 @@ class PricingEstimateResponse(SQLModel):
     suggested_title: str
     suggested_category: str
     suggested_room: str
+    suggested_description: str = ""
+    suggested_condition: str = ""
     estimated_price: float | None
     low_estimate: float | None
     high_estimate: float | None

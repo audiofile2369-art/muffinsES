@@ -1,8 +1,8 @@
-openai
-fastapi
-httpx
-psycopg[binary]
-python-multipart
-pytest
-sqlmodel
-uvicorn[standard]
+openai==3.24.0
+fastapi==0.142.2
+httpx==0.28.1
+psycopg[binary]==3.3.6
+python-multipart==0.0.32
+pytest==9.1.1
+sqlmodel==0.0.47
+uvicorn[standard]==0.54.0

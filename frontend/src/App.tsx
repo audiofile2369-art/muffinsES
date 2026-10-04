@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import {
   createCategory,
@@ -61,6 +61,12 @@ interface ItemFormState {
   photoUrl: string
 }
 
+const itemConditionOptions = ['New', 'Like New', 'Excellent', 'Good', 'Fair', 'Poor', 'For Parts']
+
+type PricingAutofillField = 'title' | 'description' | 'categoryName' | 'room' | 'condition' | 'price'
+
+type PricingAutofill = Partial<Record<PricingAutofillField, string>>
+
 interface TaskFormState {
   id: number | null
   title: string
@@ -104,6 +110,43 @@ function createEmptyCategoryForm(): CategoryFormState {
     color: '#8b5cf6',
     sortOrder: '0',
   }
+}
+
+/**
+ * Merge an AI suggestion into the item form. A field is only filled when it is
+ * empty, still at its blank-form default, or still holds the previous AI fill;
+ * anything the user typed is left alone (the suggestion stays visible on the card).
+ */
+function applyPricingSuggestion(
+  current: ItemFormState,
+  estimate: PricingEstimateResponse,
+  previousFill: PricingAutofill,
+): { form: ItemFormState; fill: PricingAutofill } {
+  const defaults = createEmptyItemForm()
+  const suggestions: Record<PricingAutofillField, string> = {
+    title: estimate.suggested_title,
+    description: estimate.suggested_description ?? '',
+    categoryName: estimate.suggested_category,
+    room: estimate.suggested_room,
+    condition: estimate.suggested_condition ?? '',
+    price: estimate.estimated_price === null ? '' : String(estimate.estimated_price),
+  }
+  const form = { ...current }
+  const fill: PricingAutofill = {}
+
+  for (const field of Object.keys(suggestions) as PricingAutofillField[]) {
+    const suggestion = suggestions[field].trim()
+    const value = current[field].trim()
+    const canFill = value === '' || value === defaults[field] || value === previousFill[field]
+    if (suggestion && canFill) {
+      form[field] = suggestion
+      fill[field] = suggestion
+    } else if (value === previousFill[field]) {
+      fill[field] = value
+    }
+  }
+
+  return { form, fill }
 }
 
 function createEmptyItemForm(): ItemFormState {
@@ -199,6 +242,7 @@ function App() {
   const [pricingAnswers, setPricingAnswers] = useState('')
   const [pricingLoading, setPricingLoading] = useState(false)
   const [pricingError, setPricingError] = useState('')
+  const pricingAutofillRef = useRef<PricingAutofill>({})
 
   const categoryLookup = useMemo(() => {
     const entries: Array<[number, string]> =
@@ -250,6 +294,7 @@ function App() {
     setPricingAnswers('')
     setPricingError('')
     setPricingLoading(false)
+    pricingAutofillRef.current = {}
   }, [])
 
   const resetItemEditor = useCallback(
@@ -417,16 +462,15 @@ function App() {
         itemForm.room,
         itemForm.notes,
         followUpAnswers,
+        workspace?.categories.map((category) => category.name) ?? [],
       )
       setPricingEstimate(estimate)
-      setItemForm((current) => ({
-        ...current,
-        title: estimate.suggested_title || current.title,
-        categoryName: estimate.suggested_category || current.categoryName,
-        room: estimate.suggested_room || current.room,
-        price:
-          estimate.estimated_price === null ? current.price : String(estimate.estimated_price),
-      }))
+      const previousFill = pricingAutofillRef.current
+      setItemForm((current) => {
+        const { form, fill } = applyPricingSuggestion(current, estimate, previousFill)
+        pricingAutofillRef.current = fill
+        return form
+      })
     } catch (error) {
       setPricingError(error instanceof Error ? error.message : 'Unable to estimate price right now.')
     } finally {
@@ -885,6 +929,30 @@ function App() {
                       onChange={(event) => setItemForm((current) => ({ ...current, title: event.target.value }))}
                       required
                     />
+                  </label>
+                  <label>
+                    Description
+                    <textarea
+                      rows={2}
+                      value={itemForm.description}
+                      onChange={(event) =>
+                        setItemForm((current) => ({ ...current, description: event.target.value }))
+                      }
+                    />
+                  </label>
+                  <label>
+                    Condition
+                    <input
+                      type="text"
+                      list="item-conditions"
+                      value={itemForm.condition}
+                      onChange={(event) => setItemForm((current) => ({ ...current, condition: event.target.value }))}
+                    />
+                    <datalist id="item-conditions">
+                      {itemConditionOptions.map((condition) => (
+                        <option key={condition} value={condition} />
+                      ))}
+                    </datalist>
                   </label>
                   <div className="form-row">
                     <label>

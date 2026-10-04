@@ -147,6 +147,8 @@ export interface PricingEstimateResponse {
   suggested_title: string
   suggested_category: string
   suggested_room: string
+  suggested_description: string
+  suggested_condition: string
   estimated_price: number | null
   low_estimate: number | null
   high_estimate: number | null

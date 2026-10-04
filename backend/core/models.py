@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from enum import StrEnum
 
 from sqlmodel import Field, SQLModel
@@ -47,7 +47,7 @@ class Sale(SQLModel, table=True):
     end_date: date
     status: SaleStatus = Field(default=SaleStatus.PLANNING)
     notes: str = Field(default="")
-    created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), nullable=False)
 
 
 class Category(SQLModel, table=True):
@@ -73,7 +73,7 @@ class Item(SQLModel, table=True):
     status: ItemStatus = Field(default=ItemStatus.AVAILABLE)
     notes: str = Field(default="")
     photo_url: str | None = Field(default=None, max_length=500)
-    created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), nullable=False)
 
 
 class Task(SQLModel, table=True):

@@ -271,12 +271,49 @@ export async function importLegacyBrowserDataToBackend(): Promise<boolean> {
   return true
 }
 
+const MAX_PHOTO_DIMENSION = 1600
+const MAX_UNSCALED_PHOTO_BYTES = 1_500_000
+
+/**
+ * Downscale large phone/tablet photos so the upload stays far below the
+ * 4.5 MB serverless request limit. Falls back to the original file.
+ */
+async function shrinkPhotoForUpload(photo: File): Promise<File> {
+  if (photo.size <= MAX_UNSCALED_PHOTO_BYTES || typeof createImageBitmap !== 'function') {
+    return photo
+  }
+
+  try {
+    const bitmap = await createImageBitmap(photo)
+    const scale = Math.min(1, MAX_PHOTO_DIMENSION / Math.max(bitmap.width, bitmap.height))
+    const canvas = document.createElement('canvas')
+    canvas.width = Math.round(bitmap.width * scale)
+    canvas.height = Math.round(bitmap.height * scale)
+    const context = canvas.getContext('2d')
+    if (!context) {
+      bitmap.close()
+      return photo
+    }
+    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height)
+    bitmap.close()
+
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.85))
+    if (!blob) {
+      return photo
+    }
+    return new File([blob], photo.name.replace(/\.[^.]+$/, '') + '.jpg', { type: 'image/jpeg' })
+  } catch {
+    return photo
+  }
+}
+
 export async function estimatePriceFromPhoto(
   photo: File,
   categoryHint: string,
   roomHint: string,
   notes: string,
   followUpAnswers: string,
+  categories: string[] = [],
 ): Promise<PricingEstimateResponse> {
   if (useBrowserDemoMode) {
     throw new Error('AI pricing needs the live backend/API to be available.')
@@ -287,11 +324,12 @@ export async function estimatePriceFromPhoto(
   }
 
   const formData = new FormData()
-  formData.append('photo', photo)
+  formData.append('photo', await shrinkPhotoForUpload(photo))
   formData.append('category_hint', categoryHint)
   formData.append('room_hint', roomHint)
   formData.append('notes', notes)
   formData.append('follow_up_answers', followUpAnswers)
+  formData.append('categories', JSON.stringify(categories))
 
   const response = await fetch(`${API_BASE_URL}/pricing/estimate`, {
     method: 'POST',
