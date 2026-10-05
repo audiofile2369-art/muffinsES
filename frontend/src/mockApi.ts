@@ -8,6 +8,7 @@ import type {
   ItemPhotoInfo,
   ItemRead,
   ItemStatus,
+  ItemPartialUpdatePayload,
   ItemUpdatePayload,
   ItemWithSale,
   ReportMetrics,
@@ -343,7 +344,10 @@ export async function listItemPhotos(itemId: number): Promise<ItemPhotoInfo[]> {
   return []
 }
 
-export async function updateItem(itemId: number, payload: ItemUpdatePayload): Promise<ItemRead> {
+export async function updateItem(
+  itemId: number,
+  payload: ItemUpdatePayload | ItemPartialUpdatePayload,
+): Promise<ItemRead> {
   const state = loadState()
   const item = state.items.find((currentItem) => currentItem.id === itemId)
   if (!item) {
@@ -363,6 +367,18 @@ export async function incrementItemQuantity(itemId: number, amount: number): Pro
   }
 
   item.quantity = (item.quantity ?? 1) + amount
+  saveState(state)
+  return item
+}
+
+export async function decrementItemQuantity(itemId: number, amount: number): Promise<ItemRead> {
+  const state = loadState()
+  const item = state.items.find((currentItem) => currentItem.id === itemId)
+  if (!item) {
+    throw new Error('Item not found.')
+  }
+
+  item.quantity = Math.max(1, (item.quantity ?? 1) - amount)
   saveState(state)
   return item
 }

@@ -626,3 +626,25 @@ def test_status_endpoint_changes_only_the_status() -> None:
         assert client.patch(f"/api/items/{item['id']}/status", json={"status": "bogus"}).status_code == 422
         assert client.patch(f"/api/items/{item['id']}/status", json={}).status_code == 422
         assert client.patch("/api/items/999999/status", json={"status": "sold"}).status_code == 404
+
+
+def test_quantity_decrement_undoes_an_increment_and_never_goes_below_one() -> None:
+    """POST /items/{id}/quantity/decrement takes quantity back, floored at 1, touching nothing else."""
+
+    with TestClient(app) as client:
+        sale_id = client.post(
+            "/api/sales",
+            json={"title": "Undo Sale", "start_date": "2026-10-01", "end_date": "2026-10-02"},
+        ).json()["id"]
+        item = client.post(
+            "/api/items", json={"sale_id": sale_id, "title": "Teacup", "price": 4, "notes": "keep"}
+        ).json()
+        assert client.post(f"/api/items/{item['id']}/quantity/increment", json={"amount": 3}).json()["quantity"] == 4
+
+        undone = client.post(f"/api/items/{item['id']}/quantity/decrement", json={"amount": 3})
+        assert undone.status_code == 200
+        assert undone.json()["quantity"] == 1
+        assert undone.json()["notes"] == "keep"
+        assert client.post(f"/api/items/{item['id']}/quantity/decrement", json={"amount": 5}).json()["quantity"] == 1
+        assert client.post(f"/api/items/{item['id']}/quantity/decrement", json={"amount": 0}).status_code == 422
+        assert client.post("/api/items/999999/quantity/decrement", json={"amount": 1}).status_code == 404

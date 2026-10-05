@@ -4,6 +4,7 @@ import { formatCurrency, itemMatchesSearch, searchTerms, titleCase } from './for
 import { ItemThumbnail } from './ItemThumbnail'
 import { PhotoSearchButton, PhotoSearchPanel } from './PhotoSearch'
 import { StatusMenu } from './StatusMenu'
+import { showToast } from './toast'
 import type { PhotoViewerState } from './ItemThumbnail'
 import type { ItemRead, ItemStatus, ItemWithSale } from './types'
 
@@ -80,7 +81,7 @@ export function AllItemsView({ onOpenItem, onOpenPhoto, onItemChanged }: AllItem
   }, [])
 
   /** One-tap status change: shown at once, status-only save, put back if it fails. */
-  async function changeStatus(item: ItemWithSale, status: ItemStatus): Promise<void> {
+  async function changeStatus(item: ItemWithSale, status: ItemStatus, withUndo = true): Promise<void> {
     const previous = item.status
     const setStatus = (from: ItemStatus, to: ItemStatus): void =>
       setItems((current) =>
@@ -95,6 +96,12 @@ export function AllItemsView({ onOpenItem, onOpenPhoto, onItemChanged }: AllItem
         current.map((existing) => (existing.id === saved.id ? { ...existing, ...saved } : existing)),
       )
       onItemChanged?.(saved)
+      if (withUndo) {
+        showToast({
+          message: `"${saved.title}" marked ${titleCase(status)}`,
+          onUndo: () => void changeStatus({ ...item, status }, previous, false),
+        })
+      }
     } catch (changeError) {
       setStatus(status, previous)
       setError(

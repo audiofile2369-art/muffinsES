@@ -147,6 +147,9 @@ export interface ItemPayload {
 
 export type ItemUpdatePayload = Omit<ItemPayload, 'sale_id'>
 
+/** Only the fields to change (the API always needs the title); unsent fields are left alone. */
+export type ItemPartialUpdatePayload = Partial<ItemUpdatePayload> & Pick<ItemUpdatePayload, 'title'>
+
 export interface TaskPayload {
   sale_id: number
   title: string

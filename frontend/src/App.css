@@ -1321,3 +1321,73 @@ details[open] summary {
   right: auto;
   left: 0;
 }
+
+/* ---------- Undo toast (bottom; above the tab bar below 1024px) ---------- */
+.toast-region {
+  position: fixed;
+  left: 12px;
+  right: 12px;
+  bottom: calc(var(--bottom-nav-height) + 12px + env(safe-area-inset-bottom));
+  z-index: 35;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.toast {
+  pointer-events: auto;
+  width: min(100%, 520px);
+  min-height: 52px;
+  padding: 6px 6px 6px 16px;
+  box-sizing: border-box;
+  border-radius: 16px;
+  background: #111827;
+  color: #f8fafc;
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.35);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 16px;
+}
+
+.toast-message {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.toast-undo,
+.toast-close {
+  min-height: 44px;
+  min-width: 44px;
+  border: none;
+  border-radius: 12px;
+  background: none;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.toast-undo {
+  padding: 0 14px;
+  color: #c4b5fd;
+}
+
+.toast-close {
+  color: #cbd5e1;
+  font-size: 22px;
+}
+
+.toast-undo:hover,
+.toast-close:hover,
+.toast-undo:focus-visible,
+.toast-close:focus-visible {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+@media (min-width: 1024px) {
+  .toast-region {
+    left: calc(var(--side-nav-width) + 24px);
+    right: 24px;
+    bottom: 24px;
+  }
+}

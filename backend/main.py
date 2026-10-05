@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import delete, func, update
+from sqlalchemy import case, delete, func, update
 from sqlmodel import Session, select
 
 from backend.config.database import close_db, database, get_db
@@ -566,6 +566,30 @@ def increment_item_quantity(
     get_item_or_404(session, item_id)
     session.exec(
         update(Item).where(Item.id == item_id).values(quantity=Item.quantity + payload.amount)
+    )
+    session.commit()
+    item = get_item_or_404(session, item_id)
+    session.refresh(item)
+    return build_item_read(session, item)
+
+
+@app.post(f"{SETTINGS.api_prefix}/items/{{item_id}}/quantity/decrement", response_model=ItemRead)
+def decrement_item_quantity(
+    item_id: int,
+    payload: ItemQuantityIncrement,
+    session: Session = Depends(get_db),
+) -> ItemRead:
+    """Take back `amount` of an item (Undo after "add to quantity"); never below 1.
+
+    One UPDATE on the quantity column only, like the increment.
+    """
+
+    get_item_or_404(session, item_id)
+    remaining = Item.quantity - payload.amount
+    session.exec(
+        update(Item)
+        .where(Item.id == item_id)
+        .values(quantity=case((remaining < 1, 1), else_=remaining))
     )
     session.commit()
     item = get_item_or_404(session, item_id)

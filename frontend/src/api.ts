@@ -7,6 +7,7 @@ import type {
   ItemPhotoInfo,
   ItemRead,
   ItemStatus,
+  ItemPartialUpdatePayload,
   ItemUpdatePayload,
   ItemWithSale,
   PhotoSearchResponse,
@@ -157,7 +158,7 @@ export function createItem(payload: ItemPayload): Promise<ItemRead> {
   })
 }
 
-export function updateItem(itemId: number, payload: ItemUpdatePayload): Promise<ItemRead> {
+export function updateItem(itemId: number, payload: ItemUpdatePayload | ItemPartialUpdatePayload): Promise<ItemRead> {
   if (useBrowserDemoMode) {
     return mockApi.updateItem(itemId, payload)
   }
@@ -178,7 +179,8 @@ export async function deleteItem(itemId: number): Promise<void> {
     throw new Error('API base URL is not configured.')
   }
 
-  const response = await fetch(`${API_BASE_URL}/items/${itemId}`, { method: 'DELETE' })
+  // keepalive: a delete flushed as the page closes (after the Undo toast) still reaches the server.
+  const response = await fetch(`${API_BASE_URL}/items/${itemId}`, { method: 'DELETE', keepalive: true })
   if (!response.ok) {
     const message = await response.text()
     throw new Error(extractErrorMessage(message, response.status))
@@ -192,6 +194,18 @@ export function incrementItemQuantity(itemId: number, amount: number): Promise<I
   }
 
   return request<ItemRead>(`/items/${itemId}/quantity/increment`, {
+    method: 'POST',
+    body: JSON.stringify({ amount }),
+  })
+}
+
+/** Take back `amount` of an item (Undo after adding to its quantity); never below 1. */
+export function decrementItemQuantity(itemId: number, amount: number): Promise<ItemRead> {
+  if (useBrowserDemoMode) {
+    return mockApi.decrementItemQuantity(itemId, amount)
+  }
+
+  return request<ItemRead>(`/items/${itemId}/quantity/decrement`, {
     method: 'POST',
     body: JSON.stringify({ amount }),
   })

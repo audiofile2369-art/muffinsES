@@ -13,6 +13,7 @@ import {
   getWorkspace,
   importLegacyBrowserDataToBackend,
   incrementItemQuantity,
+  decrementItemQuantity,
   updateItemStatus,
   updateCategory,
   updateItem,
@@ -27,6 +28,8 @@ import { ItemThumbnail } from './ItemThumbnail'
 import { PhotoSearchButton, PhotoSearchPanel } from './PhotoSearch'
 import { QuickNav } from './QuickNav'
 import { StatusMenu } from './StatusMenu'
+import { ToastHost } from './ToastHost'
+import { flushToast, showToast } from './toast'
 import { buildRouteHash, parseRouteHash } from './routes'
 import type { AppRoute, AppView, SaleSection } from './routes'
 import { stepPhotoViewer } from './photoViewer'
@@ -35,6 +38,7 @@ import type {
   CategoryRead,
   DashboardResponse,
   ItemPayload,
+  ItemPartialUpdatePayload,
   ItemRead,
   ItemStatus,
   ItemUpdatePayload,
@@ -221,6 +225,36 @@ function resolveSelectedSaleId(
   return sales[0]?.id ?? null
 }
 
+const REVERTIBLE_ITEM_FIELDS = [
+  'category_id',
+  'title',
+  'description',
+  'room',
+  'condition',
+  'price',
+  'quantity',
+  'status',
+  'notes',
+  'photo_url',
+] as const
+
+/**
+ * The fields a save changed, set back to their earlier values (for Undo).
+ * Only those fields are sent, so anything changed elsewhere since is left alone.
+ * Returns null when the save changed nothing.
+ */
+function buildRevertPayload(before: ItemRead, after: ItemRead): ItemPartialUpdatePayload | null {
+  const payload: Record<string, unknown> = { title: before.title }
+  let changed = false
+  for (const field of REVERTIBLE_ITEM_FIELDS) {
+    if (before[field] !== after[field]) {
+      payload[field] = before[field]
+      changed = true
+    }
+  }
+  return changed ? (payload as ItemPartialUpdatePayload) : null
+}
+
 /** Item names compared for duplicates: trimmed, case-insensitive, single spaces. */
 function normalizeItemName(value: string): string {
   return value.trim().replace(/\s+/g, ' ').toLowerCase()
@@ -282,6 +316,8 @@ function App() {
   const rowAnchorRef = useRef<{ id: string; top: number } | null>(null)
   // Bumped on every local change; a background refresh that started before a newer change is dropped.
   const changeSeqRef = useRef(0)
+  // Items deleted but still inside their Undo window: hidden here, DELETE sent when the toast ends.
+  const pendingDeleteIdsRef = useRef(new Set<number>())
 
   const categoryLookup = useMemo(() => {
     const entries: Array<[number, string]> =
@@ -392,6 +428,8 @@ function App() {
   }, [resetItemEditor])
 
   const refreshWorkspaceAndDashboard = useCallback(async (preferredSaleId?: number | null): Promise<WorkspaceResponse | null> => {
+    // Carry out a delete still waiting on its Undo toast before another sale is loaded.
+    await flushToast()
     setLoading(true)
     setErrorMessage('')
 
@@ -440,7 +478,11 @@ function App() {
       }
       setRefreshFailed(false)
       setDashboard(nextDashboard)
-      setWorkspace((current) => (current?.sale.id === saleId ? nextWorkspace : current))
+      const pending = pendingDeleteIdsRef.current
+      const shown = pending.size
+        ? { ...nextWorkspace, items: nextWorkspace.items.filter((item) => !pending.has(item.id)) }
+        : nextWorkspace
+      setWorkspace((current) => (current?.sale.id === saleId ? shown : current))
     } catch {
       if (seq === changeSeqRef.current) {
         setRefreshFailed(true)
@@ -730,7 +772,21 @@ function App() {
       const updated = await incrementItemQuantity(existing.id, amount)
       resetItemEditor(false)
       upsertItem(updated)
-      afterLocalChange(workspace.sale.id)
+      afterLocalChange(updated.sale_id)
+      showToast({
+        message: `Added ${amount} to "${updated.title}" (now ${updated.quantity})`,
+        onUndo: () => {
+          void (async () => {
+            try {
+              const restored = await decrementItemQuantity(updated.id, amount)
+              upsertItem(restored)
+              afterLocalChange(restored.sale_id)
+            } catch (error) {
+              setErrorMessage(`Could not undo: ${error instanceof Error ? error.message : 'unknown error'}`)
+            }
+          })()
+        },
+      })
     })
   }
 
@@ -754,6 +810,7 @@ function App() {
 
       let savedItem: ItemRead
       const isNewItem = itemForm.id === null
+      const before = workspace.items.find((item) => item.id === itemForm.id) ?? null
       if (itemForm.id !== null) {
         anchorRow(itemForm.id)
       }
@@ -770,6 +827,23 @@ function App() {
       const photoError = await savePhotosAfterSave(savedItem.id, isNewItem)
       resetItemEditor(false)
       afterLocalChange(workspace.sale.id)
+      const revert = before ? buildRevertPayload(before, savedItem) : null
+      showToast({
+        message: isNewItem ? `Added "${savedItem.title}"` : `Saved "${savedItem.title}"`,
+        onUndo: revert
+          ? () => {
+              void (async () => {
+                try {
+                  const restored = await updateItem(savedItem.id, revert)
+                  upsertItem(restored)
+                  afterLocalChange(restored.sale_id)
+                } catch (error) {
+                  setErrorMessage(`Could not undo: ${error instanceof Error ? error.message : 'unknown error'}`)
+                }
+              })()
+            }
+          : undefined,
+      })
       if (photoError) {
         setErrorMessage(photoError)
       }
@@ -809,22 +883,48 @@ function App() {
     const itemId = itemForm.id
     const saleId = workspace.sale.id
     const name = itemForm.title.trim() || 'this item'
-    if (
-      !window.confirm(
-        `Delete "${name}"? This removes it and its photos from this sale. This cannot be undone.`,
-      )
-    ) {
+    if (!window.confirm(`Delete "${name}"? This removes it and its photos from this sale.`)) {
       return
     }
 
-    await withSavingState(async () => {
-      await deleteItem(itemId)
-      resetItemEditor(false)
-      // Drop the row right away; then refresh totals quietly (no loading screen, no scroll jump).
-      setWorkspace((current) =>
-        current ? { ...current, items: current.items.filter((item) => item.id !== itemId) } : current,
-      )
-      afterLocalChange(saleId)
+    const index = workspace.items.findIndex((item) => item.id === itemId)
+    const removed = workspace.items[index]
+    if (!removed) {
+      return
+    }
+    const restore = (): void => {
+      pendingDeleteIdsRef.current.delete(itemId)
+      setWorkspace((current) => {
+        if (!current || current.sale.id !== saleId || current.items.some((item) => item.id === itemId)) {
+          return current
+        }
+        const items = [...current.items]
+        items.splice(Math.min(index, items.length), 0, removed)
+        return { ...current, items }
+      })
+    }
+
+    // Hide the row now; the real DELETE waits until the Undo toast ends (or the page is left).
+    resetItemEditor(false)
+    pendingDeleteIdsRef.current.add(itemId)
+    setWorkspace((current) =>
+      current ? { ...current, items: current.items.filter((item) => item.id !== itemId) } : current,
+    )
+    showToast({
+      message: `Deleted "${name}"`,
+      onUndo: restore,
+      onExpire: async () => {
+        try {
+          await deleteItem(itemId)
+          pendingDeleteIdsRef.current.delete(itemId)
+          afterLocalChange(saleId)
+        } catch (error) {
+          restore()
+          setErrorMessage(
+            `Could not delete "${name}": ${error instanceof Error ? error.message : 'unknown error'}`,
+          )
+        }
+      },
     })
   }
 
@@ -841,7 +941,7 @@ function App() {
    * One-tap status change from a list: shown at once, saved with the status-only
    * endpoint (so nothing else on the item is overwritten), put back if it fails.
    */
-  async function changeItemStatus(item: ItemRead, status: ItemStatus): Promise<boolean> {
+  async function changeItemStatus(item: ItemRead, status: ItemStatus, withUndo = true): Promise<boolean> {
     const previous = item.status
     const setStatus = (from: ItemStatus, to: ItemStatus): void =>
       setWorkspace((current) =>
@@ -861,6 +961,12 @@ function App() {
       const saved = await updateItemStatus(item.id, status)
       upsertItem(saved)
       afterLocalChange(saved.sale_id)
+      if (withUndo) {
+        showToast({
+          message: `"${saved.title}" marked ${titleCase(status)}`,
+          onUndo: () => void changeItemStatus(saved, previous, false),
+        })
+      }
       return true
     } catch (error) {
       setStatus(status, previous)
@@ -1060,17 +1166,20 @@ function App() {
 
   useEffect(() => {
     function handlePopState(): void {
-      void applyRoute(parseRouteHash(window.location.hash))
+      const route = parseRouteHash(window.location.hash)
+      void flushToast().then(() => applyRoute(route))
     }
     window.addEventListener('popstate', handlePopState)
     return () => window.removeEventListener('popstate', handlePopState)
   }, [applyRoute])
 
-  function navigate(route: AppRoute): Promise<WorkspaceResponse | null> {
+  async function navigate(route: AppRoute): Promise<WorkspaceResponse | null> {
     const nextHash = buildRouteHash(route)
     if (window.location.hash !== nextHash) {
       window.history.pushState(null, '', nextHash)
     }
+    // A delete waiting on its Undo toast is sent before another view loads its own copy.
+    await flushToast()
     return applyRoute(route)
   }
 
@@ -1317,6 +1426,7 @@ function App() {
 
   return (
     <div className="app-layout">
+      <ToastHost />
       <QuickNav
         view={view}
         section={activeSection}
