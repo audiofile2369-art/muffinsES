@@ -77,6 +77,66 @@ export interface ItemSaleEvent {
   amount: number
   payment_method: PaymentMethod | null
   sold_at: string | null
+  /** The customer sale (checkout) this was part of; null for older sales. */
+  order_id?: number | null
+}
+
+/** One cart line sent to checkout. `unit_price` null = the listed price. */
+export interface CheckoutLinePayload {
+  item_id: number
+  quantity: number
+  unit_price: number | null
+  /** A $ discount off this line. */
+  line_discount: number
+}
+
+/** Sell a cart to one customer. At most one of the three sale-wide discounts. */
+export interface CheckoutPayload {
+  lines: CheckoutLinePayload[]
+  payment_method: PaymentMethod
+  discount_amount?: number | null
+  discount_percent?: number | null
+  set_total?: number | null
+  note: string
+}
+
+export interface OrderLine {
+  item_id: number
+  title: string
+  quantity: number
+  unit_price: number
+  list_price: number | null
+  line_discount: number
+  /** Money received for this line after every discount. */
+  amount: number
+  event_id: number | null
+  /** Undone since (Undo, status change, deleted item, or the sale voided). */
+  returned: boolean
+}
+
+/** One sale to one customer. */
+export interface OrderRead {
+  id: number
+  sale_id: number
+  subtotal: number
+  discount_total: number
+  total: number
+  received_total: number
+  item_count: number
+  payment_method: PaymentMethod
+  note: string
+  created_at: string
+  voided_at: string | null
+  voided: boolean
+  lines: OrderLine[]
+}
+
+/** A cart line the server could not sell (409 from checkout). */
+export interface CheckoutUnavailable {
+  item_id: number
+  title: string
+  remaining: number
+  reason: 'sold' | 'not_enough' | 'deleted'
 }
 
 export interface ItemSellPayload {

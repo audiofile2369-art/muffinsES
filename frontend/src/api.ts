@@ -1,5 +1,8 @@
 import type {
   BulkItemUpdatePayload,
+  CheckoutPayload,
+  CheckoutUnavailable,
+  OrderRead,
   CategoryPayload,
   CategoryRead,
   DashboardResponse,
@@ -35,6 +38,29 @@ const productionApiBaseUrl = localApiBaseUrl === null ? '/api' : null
 const API_BASE_URL = configuredApiBaseUrl ?? localApiBaseUrl ?? productionApiBaseUrl
 const useBrowserDemoMode = API_BASE_URL === null
 
+/** A failed request: `status` and, for a checkout conflict, the cart lines that cannot be sold. */
+export class ApiError extends Error {
+  status: number
+  unavailable: CheckoutUnavailable[]
+
+  constructor(message: string, status: number, unavailable: CheckoutUnavailable[] = []) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+    this.unavailable = unavailable
+  }
+}
+
+function extractUnavailable(rawMessage: string): CheckoutUnavailable[] {
+  try {
+    const parsed = JSON.parse(rawMessage) as { detail?: { unavailable?: unknown } }
+    const list = parsed.detail?.unavailable
+    return Array.isArray(list) ? (list as CheckoutUnavailable[]) : []
+  } catch {
+    return []
+  }
+}
+
 function extractErrorMessage(rawMessage: string, status: number): string {
   const trimmedMessage = rawMessage.trim()
   if (!trimmedMessage) {
@@ -45,6 +71,10 @@ function extractErrorMessage(rawMessage: string, status: number): string {
     const parsed = JSON.parse(trimmedMessage) as { detail?: unknown; message?: unknown }
     if (typeof parsed.detail === 'string' && parsed.detail.trim()) {
       return parsed.detail.trim()
+    }
+    const detailMessage = (parsed.detail as { message?: unknown } | undefined)?.message
+    if (typeof detailMessage === 'string' && detailMessage.trim()) {
+      return detailMessage.trim()
     }
     if (typeof parsed.message === 'string' && parsed.message.trim()) {
       return parsed.message.trim()
@@ -71,7 +101,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
   if (!response.ok) {
     const message = await response.text()
-    throw new Error(extractErrorMessage(message, response.status))
+    throw new ApiError(extractErrorMessage(message, response.status), response.status, extractUnavailable(message))
   }
 
   return (await response.json()) as T
@@ -223,6 +253,36 @@ export function sellItem(itemId: number, payload: ItemSellPayload): Promise<Item
     method: 'POST',
     body: JSON.stringify(payload),
   })
+}
+
+/** Sell a cart of items to one customer, all or nothing (409 ApiError lists unavailable lines). */
+export function checkoutSale(saleId: number, payload: CheckoutPayload): Promise<OrderRead> {
+  if (useBrowserDemoMode) {
+    return mockApi.checkoutSale(saleId, payload)
+  }
+
+  return request<OrderRead>(`/sales/${saleId}/checkout`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+/** Customer sales at an estate sale, newest first (voided ones included). */
+export function getSaleOrders(saleId: number): Promise<OrderRead[]> {
+  if (useBrowserDemoMode) {
+    return mockApi.getSaleOrders(saleId)
+  }
+
+  return request<OrderRead[]>(`/sales/${saleId}/orders`)
+}
+
+/** Void a customer sale: its items go back to how they were. Safe to repeat. */
+export function voidSaleOrder(saleId: number, orderId: number): Promise<OrderRead> {
+  if (useBrowserDemoMode) {
+    return mockApi.voidSaleOrder(saleId, orderId)
+  }
+
+  return request<OrderRead>(`/sales/${saleId}/orders/${orderId}/void`, { method: 'POST' })
 }
 
 /** Undo one recorded sale, or (no eventId) every sale of the item. */

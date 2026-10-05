@@ -1,5 +1,8 @@
+import { priceCart, toCents } from './checkout'
 import type {
   BulkItemUpdatePayload,
+  CheckoutPayload,
+  OrderRead,
   CategoryBreakdown,
   CategoryPayload,
   CategoryRead,
@@ -29,6 +32,8 @@ interface MockState {
   categories: CategoryRead[]
   items: ItemRead[]
   tasks: TaskRead[]
+  /** Customer sales (added later; absent in older stored states). */
+  orders?: OrderRead[]
   nextIds: {
     sale: number
     category: number
@@ -219,7 +224,7 @@ function buildReport(saleId: number, state: MockState): ReportMetrics {
 function buildWorkspace(saleId: number, state: MockState): WorkspaceResponse {
   const sale = state.sales.find((currentSale) => currentSale.id === saleId)
   if (!sale) {
-    throw new Error('Sale not found.')
+    throw new Error('Estate sale not found.')
   }
 
   return {
@@ -280,7 +285,7 @@ export async function updateSale(saleId: number, payload: SalePayload): Promise<
   const state = loadState()
   const sale = state.sales.find((currentSale) => currentSale.id === saleId)
   if (!sale) {
-    throw new Error('Sale not found.')
+    throw new Error('Estate sale not found.')
   }
 
   Object.assign(sale, payload)
@@ -506,4 +511,115 @@ export async function updateTask(taskId: number, payload: TaskUpdatePayload): Pr
   Object.assign(task, payload)
   saveState(state)
   return task
+}
+
+function recomputeSold(item: ItemRead): void {
+  const events = item.sale_events ?? []
+  item.sold_quantity = events.reduce((sum, event) => sum + event.quantity, 0)
+  item.sold_total = events.length ? events.reduce((sum, event) => sum + event.amount, 0) : null
+  item.sold_at = events.at(-1)?.sold_at ?? null
+  item.payment_method = events.at(-1)?.payment_method ?? null
+}
+
+/** Browser-demo checkout: same pricing as the server, all lines or none. */
+export async function checkoutSale(saleId: number, payload: CheckoutPayload): Promise<OrderRead> {
+  const state = loadState()
+  const items = payload.lines.map((line) => state.items.find((item) => item.id === line.item_id))
+  payload.lines.forEach((line, index) => {
+    const item = items[index]
+    if (!item || item.sale_id !== saleId) {
+      throw new Error('An item in the cart is not part of this estate sale.')
+    }
+    const sold = (item.sale_events ?? []).reduce((sum, event) => sum + event.quantity, 0)
+    const remaining = item.status === 'sold' ? 0 : Math.max(0, (item.quantity ?? 1) - sold)
+    if (line.quantity > remaining) {
+      throw new Error(`"${item.title}" has only ${remaining} left.`)
+    }
+  })
+  const kind =
+    payload.set_total != null ? 'total' : payload.discount_percent != null ? 'percent' : payload.discount_amount != null ? 'amount' : 'none'
+  const value = payload.set_total ?? payload.discount_percent ?? payload.discount_amount ?? null
+  const lines = payload.lines.map((line, index) => ({
+    quantity: line.quantity,
+    unitPrice: line.unit_price ?? items[index]?.price ?? 0,
+    lineDiscount: line.line_discount,
+  }))
+  const priced = priceCart(lines, kind, value)
+  if (priced.totalTooHigh) {
+    throw new Error("The total can't be more than the items add up to.")
+  }
+  const totalCents = toCents(priced.total)
+  const itemsCents = toCents(priced.itemsTotal)
+  const shares = priced.lineNets.slice(0, -1).map((net) => (itemsCents ? Math.round((totalCents * toCents(net)) / itemsCents) : 0))
+  const amounts = [...shares, totalCents - shares.reduce((sum, share) => sum + share, 0)].map((cents) => cents / 100)
+  const orderId = Date.now()
+  const soldAt = new Date().toISOString()
+  const order: OrderRead = {
+    id: orderId,
+    sale_id: saleId,
+    subtotal: priced.subtotal,
+    discount_total: Math.round((priced.subtotal - priced.total) * 100) / 100,
+    total: priced.total,
+    received_total: priced.total,
+    item_count: lines.reduce((sum, line) => sum + line.quantity, 0),
+    payment_method: payload.payment_method,
+    note: payload.note.trim(),
+    created_at: soldAt,
+    voided_at: null,
+    voided: false,
+    lines: [],
+  }
+  payload.lines.forEach((line, index) => {
+    const item = items[index] as ItemRead
+    const event = { id: orderId + index + 1, quantity: line.quantity, amount: amounts[index], payment_method: payload.payment_method, sold_at: soldAt, order_id: orderId }
+    item.sale_events = [...(item.sale_events ?? []), event]
+    recomputeSold(item)
+    if ((item.sold_quantity ?? 0) >= (item.quantity ?? 1)) {
+      item.status = 'sold'
+    }
+    order.lines.push({
+      item_id: item.id,
+      title: item.title,
+      quantity: line.quantity,
+      unit_price: lines[index].unitPrice,
+      list_price: item.price,
+      line_discount: Math.round((lines[index].unitPrice * line.quantity - priced.lineNets[index]) * 100) / 100,
+      amount: amounts[index],
+      event_id: event.id,
+      returned: false,
+    })
+  })
+  state.orders = [order, ...(state.orders ?? [])]
+  saveState(state)
+  return order
+}
+
+export async function getSaleOrders(saleId: number): Promise<OrderRead[]> {
+  return (loadState().orders ?? []).filter((order) => order.sale_id === saleId)
+}
+
+export async function voidSaleOrder(saleId: number, orderId: number): Promise<OrderRead> {
+  const state = loadState()
+  const order = (state.orders ?? []).find((entry) => entry.id === orderId && entry.sale_id === saleId)
+  if (!order) {
+    throw new Error('Sale not found.')
+  }
+  if (!order.voided) {
+    for (const item of state.items) {
+      const kept = (item.sale_events ?? []).filter((event) => event.order_id !== orderId)
+      if (kept.length !== (item.sale_events ?? []).length) {
+        item.sale_events = kept
+        recomputeSold(item)
+        if (item.status === 'sold') {
+          item.status = 'available'
+        }
+      }
+    }
+    order.voided = true
+    order.voided_at = new Date().toISOString()
+    order.received_total = 0
+    order.lines = order.lines.map((line) => ({ ...line, returned: true }))
+    saveState(state)
+  }
+  return order
 }

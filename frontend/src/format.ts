@@ -43,3 +43,13 @@ export function itemMatchesSearch(item: ItemRead, terms: string[], extraText: st
 
   return terms.every((term) => searchableText.includes(term))
 }
+
+/** Money to the cent ("$12.50"), for prices and totals at the till. */
+export function formatMoney(value: number): string {
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(value)
+}

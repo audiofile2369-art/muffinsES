@@ -5,6 +5,8 @@ interface SellControlsProps {
   item: ItemRead
   onSell: (item: ItemRead) => void
   onUndoSale: (item: ItemRead) => void
+  /** When given, an "Add to sale" button puts the item in the Sale page's cart. */
+  onAddToSale?: (item: ItemRead) => void
   /** Bigger buttons (item editor, Sale day). */
   large?: boolean
 }
@@ -13,7 +15,7 @@ interface SellControlsProps {
  * The row's quick action: "Sell item" while units remain ("2 of 5 sold" for a
  * partly sold lot); once fully sold, "Sold" + how it was paid + "Undo sale".
  */
-export function SellControls({ item, onSell, onUndoSale, large = false }: SellControlsProps) {
+export function SellControls({ item, onSell, onUndoSale, onAddToSale, large = false }: SellControlsProps) {
   const remaining = remainingUnits(item)
   const sold = soldUnits(item)
   const quantity = item.quantity ?? 1
@@ -53,6 +55,16 @@ export function SellControls({ item, onSell, onUndoSale, large = false }: SellCo
       >
         Sell item
       </button>
+      {onAddToSale ? (
+        <button
+          type="button"
+          className="secondary-button add-to-sale-button"
+          aria-label={`Add ${item.title} to a sale with other items`}
+          onClick={() => onAddToSale(item)}
+        >
+          Add to sale
+        </button>
+      ) : null}
     </div>
   )
 }
