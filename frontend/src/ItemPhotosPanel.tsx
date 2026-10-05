@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import {
   addItemPhoto,
@@ -20,14 +20,9 @@ interface PendingUpload {
 }
 
 interface ItemPhotosPanelProps {
-  /** The saved item, or null while adding a new item (photos are then queued). */
-  itemId: number | null
+  /** The saved item (a new item gets its one photo from the AI pricing step instead). */
+  itemId: number
   itemTitle: string
-  /** Photos picked for a new item, uploaded right after it is created. */
-  queuedFiles: File[]
-  onQueuedFilesChange: (files: File[]) => void
-  /** True when an AI pricing photo will also be saved with the item. */
-  hasPricingPhoto: boolean
   onItemChanged: (item: ItemRead) => void
   onOpenViewer: (viewer: PhotoViewerState) => void
 }
@@ -39,20 +34,16 @@ function pickedFiles(event: FormEvent<HTMLInputElement>): File[] {
 }
 
 /**
- * The item's own photos: view, add (camera or several files), remove and pick
- * the main one. Saved items upload immediately; new items queue the photos.
- * Never runs AI pricing.
+ * A saved item's photos ("Add more photos"): view, add (camera or several files),
+ * remove and pick the main one. Uploads happen immediately. Never runs AI pricing.
  */
 export function ItemPhotosPanel({
   itemId,
   itemTitle,
-  queuedFiles,
-  onQueuedFilesChange,
-  hasPricingPhoto,
   onItemChanged,
   onOpenViewer,
 }: ItemPhotosPanelProps) {
-  const [photos, setPhotos] = useState<ItemPhotoInfo[] | null>(itemId === null ? [] : null)
+  const [photos, setPhotos] = useState<ItemPhotoInfo[] | null>(null)
   const [loadError, setLoadError] = useState('')
   const [actionError, setActionError] = useState('')
   const [uploads, setUploads] = useState<PendingUpload[]>([])
@@ -61,9 +52,6 @@ export function ItemPhotosPanel({
   const uploadQueueRef = useRef<Promise<void>>(Promise.resolve())
 
   useEffect(() => {
-    if (itemId === null) {
-      return
-    }
     let cancelled = false
     listItemPhotos(itemId)
       .then((list) => {
@@ -82,33 +70,21 @@ export function ItemPhotosPanel({
     }
   }, [itemId])
 
-  const queuedPreviews = useMemo(() => queuedFiles.map((file) => URL.createObjectURL(file)), [queuedFiles])
-  useEffect(() => () => queuedPreviews.forEach((url) => URL.revokeObjectURL(url)), [queuedPreviews])
-
   const savedCount = photos?.length ?? 0
-  const totalCount =
-    itemId === null ? queuedFiles.length + (hasPricingPhoto ? 1 : 0) : savedCount + uploads.length
+  const totalCount = savedCount + uploads.length
   const roomLeft = Math.max(0, MAX_PHOTOS_PER_ITEM - totalCount)
 
-  const savedImages: PhotoViewerImage[] =
-    itemId === null
-      ? []
-      : (photos ?? []).map((photo, position) => ({
-          src: getItemGalleryPhotoUrl(itemId, photo) ?? '',
-          alt: `Photo ${position + 1} of ${savedCount} of ${itemTitle || 'this item'}`,
-        }))
+  const savedImages: PhotoViewerImage[] = (photos ?? []).map((photo, position) => ({
+    src: getItemGalleryPhotoUrl(itemId, photo) ?? '',
+    alt: `Photo ${position + 1} of ${savedCount} of ${itemTitle || 'this item'}`,
+  }))
 
   async function refreshAfter(item: ItemRead): Promise<void> {
     onItemChanged(item)
-    if (itemId !== null) {
-      setPhotos(await listItemPhotos(itemId))
-    }
+    setPhotos(await listItemPhotos(itemId))
   }
 
   function uploadOne(upload: PendingUpload): void {
-    if (itemId === null) {
-      return
-    }
     // One upload at a time keeps the photo order and the per-item limit exact.
     uploadQueueRef.current = uploadQueueRef.current.then(async () => {
       try {
@@ -136,10 +112,6 @@ export function ItemPhotosPanel({
       setActionError(
         `An item can have up to ${MAX_PHOTOS_PER_ITEM} photos, so ${files.length - accepted.length} photo(s) were not added.`,
       )
-    }
-    if (itemId === null) {
-      onQueuedFilesChange([...queuedFiles, ...accepted])
-      return
     }
     const newUploads = accepted.map((file) => {
       uploadKeyRef.current += 1
@@ -173,9 +145,6 @@ export function ItemPhotosPanel({
   }
 
   function handleRemove(photo: ItemPhotoInfo): void {
-    if (itemId === null) {
-      return
-    }
     const question = photo.is_main && savedCount > 1
       ? 'Remove the main photo? The next photo will become the main one. This cannot be undone.'
       : 'Remove this photo? This cannot be undone.'
@@ -186,15 +155,11 @@ export function ItemPhotosPanel({
   }
 
   function handleMakeMain(photo: ItemPhotoInfo): void {
-    if (itemId === null || photo.id === null) {
+    if (photo.id === null) {
       return
     }
     const photoId = photo.id
     void runPhotoAction(() => setMainItemPhoto(itemId, photoId), 'The main photo could not be changed.')
-  }
-
-  function removeQueued(index: number): void {
-    onQueuedFilesChange(queuedFiles.filter((_, position) => position !== index))
   }
 
   const addButtons = (
@@ -227,12 +192,12 @@ export function ItemPhotosPanel({
   return (
     <fieldset className="item-photos" aria-busy={busy || uploads.some((upload) => !upload.error)}>
       <legend>
-        Photos{totalCount > 0 ? ` (${totalCount})` : ''}
+        Photos{totalCount > 0 ? ` (${totalCount})` : ''} &mdash; add more photos
       </legend>
       {photos === null ? <p className="hint-copy">Loading photos...</p> : null}
       {loadError ? <div className="notice error">{loadError}</div> : null}
 
-      {itemId !== null && (savedCount > 0 || uploads.length > 0) ? (
+      {savedCount > 0 || uploads.length > 0 ? (
         <ul className="photo-grid">
           {(photos ?? []).map((photo, position) => (
             <li key={`${photo.id ?? 'main'}-${photo.version}`} className="photo-tile">
@@ -298,41 +263,13 @@ export function ItemPhotosPanel({
         </ul>
       ) : null}
 
-      {itemId === null && queuedFiles.length > 0 ? (
-        <ul className="photo-grid">
-          {queuedFiles.map((file, index) => (
-            <li key={`${file.name}-${file.lastModified}-${index}`} className="photo-tile">
-              <span className="photo-tile-image">
-                <img src={queuedPreviews[index]} alt={`New photo ${index + 1}`} />
-              </span>
-              {index === 0 && !hasPricingPhoto ? <span className="photo-tile-badge">Main photo</span> : null}
-              <button type="button" className="secondary-button photo-tile-action" onClick={() => removeQueued(index)}>
-                Remove
-              </button>
-            </li>
-          ))}
-        </ul>
-      ) : null}
-
       {photos !== null && totalCount === 0 ? <p className="hint-copy">No photos yet.</p> : null}
-      {itemId === null && (queuedFiles.length > 0 || hasPricingPhoto) ? (
-        <p className="hint-copy">
-          {hasPricingPhoto ? 'The AI pricing photo below will be saved too, as the main photo.' : 'The first photo will be the main photo.'}
-        </p>
-      ) : null}
-      {itemId !== null && hasPricingPhoto ? (
-        <p className="hint-copy">The AI pricing photo below is added to these photos when you press Update item.</p>
-      ) : null}
       {actionError ? <div className="notice error">{actionError}</div> : null}
       {addButtons}
       {roomLeft === 0 ? (
         <p className="hint-copy">This item has the most photos allowed ({MAX_PHOTOS_PER_ITEM}).</p>
       ) : (
-        <p className="hint-copy">
-          {itemId === null
-            ? 'Photos added here are saved when you press Save item. They do not run AI pricing.'
-            : 'Photos added here are saved right away. They do not run AI pricing.'}
-        </p>
+        <p className="hint-copy">Photos added here are saved right away.</p>
       )}
     </fieldset>
   )

@@ -1577,3 +1577,26 @@ details[open] summary {
     max-width: 44%;
   }
 }
+
+/* ---------- Add item: photo first, then the AI-filled fields ---------- */
+.add-photo-step .photo-actions .primary-button,
+.add-photo-step .photo-actions .secondary-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+.add-photo-step .add-photo-button {
+  min-height: 64px;
+  font-size: 18px;
+}
+
+.pricing-loading {
+  font-weight: 700;
+}
+
+.rerun-pricing {
+  align-self: flex-start;
+  min-height: 44px;
+}

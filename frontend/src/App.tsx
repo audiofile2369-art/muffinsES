@@ -318,8 +318,8 @@ function App() {
   const [pricingAnswers, setPricingAnswers] = useState('')
   const [pricingLoading, setPricingLoading] = useState(false)
   const [pricingError, setPricingError] = useState('')
-  // Photos picked in the Photos area for a new item; uploaded right after it is created.
-  const [queuedPhotos, setQueuedPhotos] = useState<File[]>([])
+  // A new item's form fields stay hidden until its photo has been through AI pricing (or failed to).
+  const [pricingAttempted, setPricingAttempted] = useState(false)
   const [photoViewer, setPhotoViewer] = useState<PhotoViewerState | null>(null)
   const [duplicatePrompt, setDuplicatePrompt] = useState<DuplicatePromptState | null>(null)
   const [view, setView] = useState<AppView>(() => parseRouteHash(window.location.hash).view)
@@ -387,7 +387,7 @@ function App() {
     setPricingAnswers('')
     setPricingError('')
     setPricingLoading(false)
-    setQueuedPhotos([])
+    setPricingAttempted(false)
     pricingAutofillRef.current = {}
   }, [])
 
@@ -683,6 +683,31 @@ function App() {
       setPricingError(error instanceof Error ? error.message : 'Unable to estimate price right now.')
     } finally {
       setPricingLoading(false)
+      setPricingAttempted(true)
+    }
+  }
+
+  /** Editing a saved item: run AI pricing again on its current main photo (no new file picked). */
+  async function handleRerunPricing(item: ItemRead): Promise<void> {
+    const url = getItemPhotoUrl(item)
+    if (!url) {
+      return
+    }
+    setPricingLoading(true)
+    setPricingError('')
+    try {
+      const response = await fetch(url)
+      if (!response.ok) {
+        throw new Error(`Could not load the photo (${response.status}).`)
+      }
+      const blob = await response.blob()
+      const file = new File([blob], 'main-photo', { type: blob.type || 'image/jpeg' })
+      // Kept for "Update estimate"; never uploaded again for a saved item.
+      setPricingImageFile(file)
+      await requestPriceEstimate(file, '')
+    } catch (error) {
+      setPricingError(error instanceof Error ? error.message : 'Unable to estimate price right now.')
+      setPricingLoading(false)
     }
   }
 
@@ -894,7 +919,9 @@ function App() {
    * Returns an error message instead of throwing so a photo problem never loses the item.
    */
   async function savePhotosAfterSave(itemId: number, isNewItem: boolean): Promise<string> {
-    const files = [...(pricingImageFile ? [pricingImageFile] : []), ...(isNewItem ? queuedPhotos : [])]
+    // A new item's one photo (the AI pricing photo) becomes its main photo. A saved item's
+    // photos are managed in its Photos section, so nothing is uploaded here for it.
+    const files = isNewItem && pricingImageFile ? [pricingImageFile] : []
     let failed = 0
     let reason = ''
     for (const file of files) {
@@ -1107,7 +1134,7 @@ function App() {
   // Photos added in the Photos section of an existing item are saved at once and never count.
   const itemDirty =
     showItemForm &&
-    (!sameFormValues(itemForm, itemBaseline) || pricingImageFile !== null || queuedPhotos.length > 0)
+    (!sameFormValues(itemForm, itemBaseline) || (itemForm.id === null && pricingImageFile !== null))
   const taskDirty = !sameFormValues(taskForm, taskBaseline)
   const saleDirty =
     workspace !== null &&
@@ -1425,53 +1452,71 @@ function App() {
           ) : null}
         </div>
       ) : null}
-      <ItemPhotosPanel
-        key={itemForm.id ?? 'new'}
-        itemId={itemForm.id}
-        itemTitle={itemForm.title}
-        queuedFiles={queuedPhotos}
-        onQueuedFilesChange={setQueuedPhotos}
-        hasPricingPhoto={pricingImageFile !== null}
-        onItemChanged={applyItemChange}
-        onOpenViewer={setPhotoViewer}
-      />
-      <fieldset className="photo-field ai-pricing-field">
-        <legend>AI pricing (optional)</legend>
-        <p className="hint-copy">
-          Take or pick one photo and AI suggests a name, details and price. That photo is also saved with the
-          item, so there is no need to add it again above.
+      {itemForm.id === null ? (
+        <fieldset className="photo-field ai-pricing-field add-photo-step">
+          <legend>{pricingImageFile ? 'Item photo' : 'Take a photo of the item'}</legend>
+          {pricingImageFile ? null : (
+            <p className="hint-copy">AI looks at the photo and fills in the name, details and price for you.</p>
+          )}
+          {pricingPreviewUrl ? (
+            <img src={pricingPreviewUrl} alt="Photo of the new item" className="pricing-preview" />
+          ) : null}
+          <div className="photo-actions">
+            <label className={pricingImageFile ? 'secondary-button' : 'primary-button add-photo-button'}>
+              {pricingImageFile ? 'Retake photo' : 'Take photo'}
+              <input
+                type="file"
+                accept="image/*"
+                capture="environment"
+                hidden
+                disabled={pricingLoading}
+                onChange={(event) => void handlePhotoSelected(event)}
+              />
+            </label>
+            <label className={pricingImageFile ? 'secondary-button' : 'primary-button add-photo-button'}>
+              {pricingImageFile ? 'Pick another photo' : 'Upload photo'}
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                hidden
+                disabled={pricingLoading}
+                onChange={(event) => void handlePhotoSelected(event)}
+              />
+            </label>
+          </div>
+        </fieldset>
+      ) : (
+        <>
+          <ItemPhotosPanel
+            key={itemForm.id}
+            itemId={itemForm.id}
+            itemTitle={itemForm.title}
+            onItemChanged={applyItemChange}
+            onOpenViewer={setPhotoViewer}
+          />
+          {editingItem && getItemPhotoUrl(editingItem) ? (
+            <button
+              type="button"
+              className="link-button rerun-pricing"
+              disabled={pricingLoading}
+              onClick={() => void handleRerunPricing(editingItem)}
+            >
+              Re-run AI pricing on the main photo
+            </button>
+          ) : null}
+        </>
+      )}
+      {pricingLoading ? (
+        <p className="hint-copy pricing-loading" role="status">
+          Looking at the photo&hellip;
         </p>
-        <div className="photo-actions">
-          <label className="secondary-button">
-            Take photo for pricing
-            <input
-              type="file"
-              accept="image/*"
-              capture="environment"
-              hidden
-              onChange={(event) => void handlePhotoSelected(event)}
-            />
-          </label>
-          <label className="secondary-button">
-            Upload photo for pricing
-            <input
-              type="file"
-              accept="image/png,image/jpeg,image/webp"
-              hidden
-              onChange={(event) => void handlePhotoSelected(event)}
-            />
-          </label>
-        </div>
-      </fieldset>
-      {pricingPreviewUrl ? (
-        <img
-          src={pricingPreviewUrl}
-          alt="Item preview for pricing"
-          className="pricing-preview"
-        />
       ) : null}
-      {pricingLoading ? <p className="hint-copy">Checking the photo and estimating price...</p> : null}
-      {pricingError ? <div className="notice error">{pricingError}</div> : null}
+      {pricingError ? (
+        <div className="notice error">
+          AI pricing did not work this time ({pricingError}).{' '}
+          {itemForm.id === null ? 'The photo is kept; type the details in below.' : ''}
+        </div>
+      ) : null}
       {pricingEstimate ? (
         <div className="pricing-card">
           <strong>
@@ -1515,6 +1560,8 @@ function App() {
           ) : null}
         </div>
       ) : null}
+      {itemForm.id !== null || pricingAttempted ? (
+      <>
       <label>
         Item name
         <input
@@ -1645,6 +1692,8 @@ function App() {
             Delete item
           </button>
         </div>
+      ) : null}
+      </>
       ) : null}
     </form>
   )
