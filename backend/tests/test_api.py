@@ -330,7 +330,7 @@ def test_all_items_lists_every_sale_with_names_and_photo_versions() -> None:
     assert "created_at" in body[created_ids[0]]
     assert all("photo_data" not in item and "data" not in item for item in body.values())
     selects = [sql for sql in statements if sql.lstrip().upper().startswith("SELECT")]
-    assert len(selects) <= 3  # items, main photo versions, extra photo counts
+    assert len(selects) <= 4  # items, main photo versions, extra photo counts, sale events
 
 
 def _add_photo(client: TestClient, item_id: int, data: bytes = JPEG_BYTES, content_type: str = "image/jpeg"):
@@ -648,3 +648,178 @@ def test_quantity_decrement_undoes_an_increment_and_never_goes_below_one() -> No
         assert client.post(f"/api/items/{item['id']}/quantity/decrement", json={"amount": 5}).json()["quantity"] == 1
         assert client.post(f"/api/items/{item['id']}/quantity/decrement", json={"amount": 0}).status_code == 422
         assert client.post("/api/items/999999/quantity/decrement", json={"amount": 1}).status_code == 404
+
+
+def _sell_sale(client: TestClient, title: str) -> int:
+    return client.post(
+        "/api/sales", json={"title": title, "start_date": "2026-10-03", "end_date": "2026-10-04"}
+    ).json()["id"]
+
+
+def test_sell_records_partial_and_full_sales_with_price_and_payment_method() -> None:
+    """Selling some units keeps the item available; the last unit sells it; totals use money received."""
+
+    with TestClient(app) as client:
+        sale_id = _sell_sale(client, "Sell Sale")
+        chairs = client.post(
+            "/api/items", json={"sale_id": sale_id, "title": "Kitchen chair", "price": 20, "quantity": 5}
+        ).json()
+
+        two = client.post(
+            f"/api/items/{chairs['id']}/sell", json={"quantity": 2, "unit_price": 15, "payment_method": "cash"}
+        )
+        assert two.status_code == 200
+        body = two.json()
+        assert body["status"] == "available"
+        assert body["sold_quantity"] == 2
+        assert body["sold_total"] == 30
+        assert body["payment_method"] == "cash"
+        assert body["sold_at"]
+        assert len(body["sale_events"]) == 1 and body["sale_events"][0]["amount"] == 30
+
+        too_many = client.post(f"/api/items/{chairs['id']}/sell", json={"quantity": 4, "payment_method": "card"})
+        assert too_many.status_code == 409
+        assert "3" in too_many.json()["detail"]
+
+        rest = client.post(f"/api/items/{chairs['id']}/sell", json={"quantity": 3, "payment_method": "venmo"}).json()
+        assert rest["status"] == "sold"
+        assert rest["sold_quantity"] == 5
+        assert rest["sold_total"] == 30 + 3 * 20  # default price = listed price
+        assert rest["payment_method"] == "venmo"
+        assert client.post(f"/api/items/{chairs['id']}/sell", json={"quantity": 1, "payment_method": "cash"}).status_code == 409
+
+        assert client.post(f"/api/items/{chairs['id']}/sell", json={"quantity": 1, "payment_method": "bitcoin"}).status_code == 422
+        assert client.post(f"/api/items/{chairs['id']}/sell", json={"quantity": 1}).status_code == 422
+        assert client.post("/api/items/999999/sell", json={"quantity": 1, "payment_method": "cash"}).status_code == 404
+
+        workspace = client.get(f"/api/sales/{sale_id}/workspace").json()
+        report = workspace["report"]
+        assert report["total_sold_value"] == 90
+        assert report["total_listed_value"] == 100
+        assert report["sold_units"] == 5
+        assert workspace["summary"]["realized_revenue"] == 90
+        breakdown = {row["payment_method"]: row for row in report["payment_breakdown"]}
+        assert breakdown["cash"] == {"payment_method": "cash", "sale_count": 1, "total": 30}
+        assert breakdown["venmo"]["total"] == 60
+
+
+def test_unsell_undoes_one_sale_or_all_and_restores_status() -> None:
+    """Undo of one sale removes exactly that sale; unsell-all clears everything and restores the old status."""
+
+    with TestClient(app) as client:
+        sale_id = _sell_sale(client, "Unsell Sale")
+        item = client.post(
+            "/api/items",
+            json={"sale_id": sale_id, "title": "Plates", "price": 2, "quantity": 3, "status": "discounted"},
+        ).json()
+        first = client.post(f"/api/items/{item['id']}/sell", json={"quantity": 1, "payment_method": "cash"}).json()
+        second = client.post(f"/api/items/{item['id']}/sell", json={"quantity": 2, "payment_method": "zelle"}).json()
+        assert second["status"] == "sold"
+        last_event = second["sale_events"][-1]["id"]
+
+        undone = client.post(f"/api/items/{item['id']}/unsell", json={"event_id": last_event}).json()
+        assert undone["status"] == "discounted"
+        assert undone["sold_quantity"] == 1
+        assert undone["sale_events"] == first["sale_events"]
+        assert client.post(f"/api/items/{item['id']}/unsell", json={"event_id": 999999}).status_code == 404
+
+        cleared = client.post(f"/api/items/{item['id']}/unsell", json={}).json()
+        assert cleared["sold_quantity"] == 0
+        assert cleared["sold_total"] is None
+        assert cleared["payment_method"] is None
+        assert cleared["sale_events"] == []
+
+        # Re-selling with the original time (how the app undoes an "unsell").
+        when = "2026-10-03T15:30:00+00:00"
+        again = client.post(
+            f"/api/items/{item['id']}/sell",
+            json={"quantity": 1, "unit_price": 2, "payment_method": "cash", "sold_at": when},
+        ).json()
+        assert again["sold_at"].startswith("2026-10-03T15:30:00")
+
+
+def test_status_back_from_sold_clears_sales_and_legacy_sold_items_still_count() -> None:
+    """Sold -> available clears recorded sales; items marked sold without a sale count fully at list price."""
+
+    with TestClient(app) as client:
+        sale_id = _sell_sale(client, "Legacy Sale")
+        legacy = client.post(
+            "/api/items",
+            json={"sale_id": sale_id, "title": "Old mirror", "price": 40, "quantity": 2, "status": "sold"},
+        ).json()
+        assert legacy["sold_quantity"] == 2
+        assert legacy["sold_total"] == 80
+        assert legacy["payment_method"] is None
+        report = client.get(f"/api/sales/{sale_id}/workspace").json()["report"]
+        assert report["payment_breakdown"] == [{"payment_method": None, "sale_count": 1, "total": 80}]
+
+        # Recording how a legacy sale was paid creates its sale row.
+        paid = client.patch(f"/api/items/{legacy['id']}/payment-method", json={"payment_method": "check"}).json()
+        assert paid["payment_method"] == "check"
+        assert paid["sold_total"] == 80
+        assert len(paid["sale_events"]) == 1 and paid["sale_events"][0]["sold_at"] is None
+        changed = client.patch(f"/api/items/{legacy['id']}/payment-method", json={"payment_method": "square"}).json()
+        assert changed["payment_method"] == "square"
+        assert len(changed["sale_events"]) == 1
+        assert client.patch(f"/api/items/{legacy['id']}/payment-method", json={"payment_method": "gold"}).status_code == 422
+
+        back = client.patch(f"/api/items/{legacy['id']}/status", json={"status": "available"}).json()
+        assert back["sold_quantity"] == 0
+        assert back["sale_events"] == []
+        assert client.patch(f"/api/items/{legacy['id']}/payment-method", json={"payment_method": "cash"}).status_code == 409
+
+        lamp = client.post("/api/items", json={"sale_id": sale_id, "title": "Lamp", "price": 10}).json()
+        client.post(f"/api/items/{lamp['id']}/sell", json={"quantity": 1, "payment_method": "card"})
+        edited = client.patch(f"/api/items/{lamp['id']}", json={"title": "Lamp", "price": 10, "status": "available"})
+        assert edited.json()["sale_events"] == []
+
+        # Deleting a sold item removes its sales too.
+        client.post(f"/api/items/{lamp['id']}/sell", json={"quantity": 1, "payment_method": "card"})
+        assert client.delete(f"/api/items/{lamp['id']}").status_code == 204
+
+
+def test_sales_table_is_added_to_an_old_database_without_touching_rows(tmp_path: Path) -> None:
+    """create_all adds the new itemsaleevent table to an old database; existing items and sold rows are kept."""
+
+    import sqlite3
+
+    from sqlmodel import Session, SQLModel, create_engine, select
+
+    from backend.config.database import ensure_item_quantity_column
+    from backend.core.models import Item
+    from backend.core.selling import load_sale_events, sold_fields
+
+    db_path = tmp_path / "old-sales.db"
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            "CREATE TABLE item (id INTEGER PRIMARY KEY, sale_id INTEGER NOT NULL, category_id INTEGER,"
+            " title VARCHAR NOT NULL, description VARCHAR NOT NULL DEFAULT '', room VARCHAR NOT NULL DEFAULT 'General',"
+            " condition VARCHAR NOT NULL DEFAULT 'Good', price FLOAT, status VARCHAR NOT NULL,"
+            " notes VARCHAR NOT NULL DEFAULT '', photo_url VARCHAR, created_at DATETIME NOT NULL)"
+        )
+        connection.execute(
+            "INSERT INTO item (id, sale_id, title, price, status, created_at)"
+            " VALUES (1, 1, 'Old lamp', 12.5, 'SOLD', '2026-01-01 00:00:00'),"
+            " (2, 1, 'Old rug', 30, 'AVAILABLE', '2026-01-01 00:00:00')"
+        )
+
+    engine = create_engine(f"sqlite:///{db_path}")
+    try:
+        SQLModel.metadata.create_all(engine)
+        ensure_item_quantity_column(engine)
+        SQLModel.metadata.create_all(engine)  # idempotent
+        with Session(engine) as session:
+            items = {item.id: item for item in session.exec(select(Item)).all()}
+            events = load_sale_events(session, list(items))
+            lamp = sold_fields(items[1], events.get(1, []))
+            rug = sold_fields(items[2], events.get(2, []))
+    finally:
+        engine.dispose()
+
+    assert lamp["sold_quantity"] == 1 and lamp["sold_total"] == 12.5
+    assert rug["sold_quantity"] == 0 and rug["sold_total"] is None
+    with sqlite3.connect(db_path) as connection:
+        rows = connection.execute("SELECT id, title, price, status, quantity FROM item ORDER BY id").fetchall()
+        tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert rows == [(1, "Old lamp", 12.5, "SOLD", 1), (2, "Old rug", 30.0, "AVAILABLE", 1)]
+    assert "itemsaleevent" in tables

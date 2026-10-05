@@ -8,7 +8,9 @@ import type {
   ItemRead,
   ItemStatus,
   ItemPartialUpdatePayload,
+  ItemSellPayload,
   ItemUpdatePayload,
+  PaymentMethod,
   ItemWithSale,
   PhotoSearchResponse,
   PricingEstimateResponse,
@@ -208,6 +210,46 @@ export function decrementItemQuantity(itemId: number, amount: number): Promise<I
   return request<ItemRead>(`/items/${itemId}/quantity/decrement`, {
     method: 'POST',
     body: JSON.stringify({ amount }),
+  })
+}
+
+/** Record a sale of some (or all remaining) units. Fails (409) when fewer remain. */
+export function sellItem(itemId: number, payload: ItemSellPayload): Promise<ItemRead> {
+  if (useBrowserDemoMode) {
+    return mockApi.sellItem(itemId, payload)
+  }
+
+  return request<ItemRead>(`/items/${itemId}/sell`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+/** Undo one recorded sale, or (no eventId) every sale of the item. */
+export function unsellItem(itemId: number, eventId?: number | null): Promise<ItemRead> {
+  if (useBrowserDemoMode) {
+    return mockApi.unsellItem(itemId, eventId ?? null)
+  }
+
+  return request<ItemRead>(`/items/${itemId}/unsell`, {
+    method: 'POST',
+    body: JSON.stringify({ event_id: eventId ?? null }),
+  })
+}
+
+/** Correct how a sale was paid (default: the latest sale). */
+export function updateItemPaymentMethod(
+  itemId: number,
+  paymentMethod: PaymentMethod,
+  eventId?: number | null,
+): Promise<ItemRead> {
+  if (useBrowserDemoMode) {
+    return mockApi.updateItemPaymentMethod(itemId, paymentMethod, eventId ?? null)
+  }
+
+  return request<ItemRead>(`/items/${itemId}/payment-method`, {
+    method: 'PATCH',
+    body: JSON.stringify({ payment_method: paymentMethod, event_id: eventId ?? null }),
   })
 }
 

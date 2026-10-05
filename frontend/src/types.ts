@@ -57,6 +57,41 @@ export interface ItemRead {
   photo_version?: string | null
   /** How many photos the item has (main + extra); absent/0 when none. */
   photo_count?: number
+  /** Units sold so far (a `sold` item counts all units). */
+  sold_quantity?: number
+  /** Total money received for all sold units; null when nothing is sold. */
+  sold_total?: number | null
+  /** Time of the latest recorded sale (ISO); null for older sales without a time. */
+  sold_at?: string | null
+  /** Payment method of the latest recorded sale. */
+  payment_method?: PaymentMethod | null
+  /** Each recorded sale; `amount` is the total received for its `quantity` units. */
+  sale_events?: ItemSaleEvent[]
+}
+
+export type PaymentMethod = 'cash' | 'card' | 'square' | 'check' | 'venmo' | 'zelle' | 'other'
+
+export interface ItemSaleEvent {
+  id: number
+  quantity: number
+  amount: number
+  payment_method: PaymentMethod | null
+  sold_at: string | null
+}
+
+export interface ItemSellPayload {
+  quantity: number
+  /** Price charged per unit. */
+  unit_price: number | null
+  payment_method: PaymentMethod
+  /** Only when putting a removed sale back (Undo). */
+  sold_at?: string | null
+}
+
+export interface PaymentBreakdown {
+  payment_method: PaymentMethod | null
+  sale_count: number
+  total: number
 }
 
 /** One stored photo of an item from GET /items/{id}/photos (id is null for the main photo). */
@@ -105,6 +140,9 @@ export interface ReportMetrics {
   sell_through_rate: number
   category_breakdown: CategoryBreakdown[]
   room_breakdown: RoomBreakdown[]
+  total_remaining_value?: number
+  sold_units?: number
+  payment_breakdown?: PaymentBreakdown[]
 }
 
 export interface WorkspaceResponse {

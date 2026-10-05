@@ -13,7 +13,7 @@ interface StatusMenuProps {
 
 /**
  * The status pill on an item row, as a control: tap it for a small menu of the
- * statuses (current one checked) with a quick "Mark sold" on top.
+ * statuses (current one checked). Choosing Sold opens the Sell item sheet (via onChange).
  * Lives outside the row's open-editor button, and stops clicks from reaching it.
  */
 export function StatusMenu({ status, itemTitle, onChange }: StatusMenuProps) {
@@ -99,11 +99,6 @@ export function StatusMenu({ status, itemTitle, onChange }: StatusMenuProps) {
           aria-label={`Status of ${itemTitle}`}
           onKeyDown={handleMenuKeyDown}
         >
-          {status !== 'sold' ? (
-            <button type="button" role="menuitem" className="status-menu-sold" onClick={() => choose('sold')}>
-              Mark sold
-            </button>
-          ) : null}
           {ITEM_STATUSES.map((option) => (
             <button
               type="button"

@@ -6,7 +6,7 @@ from datetime import date, datetime
 
 from sqlmodel import Field, SQLModel
 
-from backend.core.models import ItemStatus, SaleStatus, TaskStatus
+from backend.core.models import ItemStatus, PaymentMethod, SaleStatus, TaskStatus
 
 
 class SaleCreate(SQLModel):
@@ -142,6 +142,41 @@ class BulkItemUpdate(SQLModel):
     category_id: int | None = None
 
 
+class ItemSell(SQLModel):
+    """Payload for selling some (or all remaining) units of an item."""
+
+    quantity: int = Field(default=1, ge=1, le=10000)
+    # Price per unit actually charged; defaults to the listed price. Stored as a total.
+    unit_price: float | None = Field(default=None, ge=0)
+    payment_method: PaymentMethod
+    # Only for Undo of an "unsell": put a removed sale back with its original time.
+    sold_at: datetime | None = None
+
+
+class ItemUnsell(SQLModel):
+    """Payload for undoing one recorded sale, or (no id) every sale of the item."""
+
+    event_id: int | None = None
+
+
+class ItemPaymentMethodUpdate(SQLModel):
+    """Payload for correcting how a sale was paid."""
+
+    payment_method: PaymentMethod
+    # Which sale to change; omitted = the latest (or the legacy, unrecorded sale).
+    event_id: int | None = None
+
+
+class ItemSaleEventRead(SQLModel):
+    """One recorded sale of an item. `amount` = total received for `quantity` units."""
+
+    id: int
+    quantity: int
+    amount: float
+    payment_method: str | None
+    sold_at: datetime | None
+
+
 class ItemRead(SQLModel):
     """Inventory item returned to the UI."""
 
@@ -159,6 +194,13 @@ class ItemRead(SQLModel):
     photo_url: str | None
     photo_version: str | None = None
     photo_count: int = 0
+    # Selling (all derived from ItemSaleEvent rows; see backend/core/selling.py).
+    sold_quantity: int = 0
+    # Total money received for all sold units (None when nothing is sold).
+    sold_total: float | None = None
+    sold_at: datetime | None = None
+    payment_method: str | None = None
+    sale_events: list[ItemSaleEventRead] = Field(default_factory=list)
 
 
 class ItemPhotoRead(SQLModel):
@@ -229,6 +271,14 @@ class RoomBreakdown(SQLModel):
     listed_value: float
 
 
+class PaymentBreakdown(SQLModel):
+    """Money received per payment method (None = not recorded, e.g. older sales)."""
+
+    payment_method: str | None
+    sale_count: int
+    total: float
+
+
 class ReportMetrics(SQLModel):
     """Sales reporting payload."""
 
@@ -240,6 +290,10 @@ class ReportMetrics(SQLModel):
     sell_through_rate: float
     category_breakdown: list[CategoryBreakdown]
     room_breakdown: list[RoomBreakdown]
+    # Listed price x units not yet sold, for items still for sale.
+    total_remaining_value: float = 0.0
+    sold_units: int = 0
+    payment_breakdown: list[PaymentBreakdown] = Field(default_factory=list)
 
 
 class WorkspaceResponse(SQLModel):

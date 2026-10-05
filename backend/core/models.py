@@ -30,6 +30,18 @@ class ItemStatus(StrEnum):
     REMOVED = "removed"
 
 
+class PaymentMethod(StrEnum):
+    """How a buyer paid for an item (stored as these lowercase keys)."""
+
+    CASH = "cash"
+    CARD = "card"
+    SQUARE = "square"
+    CHECK = "check"
+    VENMO = "venmo"
+    ZELLE = "zelle"
+    OTHER = "other"
+
+
 class TaskStatus(StrEnum):
     """Supported workflow states for a task."""
 
@@ -131,3 +143,25 @@ class ItemGalleryPhoto(SQLModel, table=True):
         sa_type=DateTime(timezone=True),
         nullable=False,
     )
+
+
+class ItemSaleEvent(SQLModel, table=True):
+    """One sale of some units of an item: the single source of truth for what sold.
+
+    A new table (rather than new columns on `item`) so `create_all` adds it to
+    existing databases without altering or rewriting any existing row. Each
+    "Sell item" adds one row; Undo removes exactly that row.
+
+    `amount` is the total money received for the `quantity` units in this sale
+    (not a per-unit price). `sold_at` is None only for a legacy sale recorded
+    afterwards (an item marked sold before sales were recorded).
+    `status_before` is the item's status before this sale, restored by Undo.
+    """
+
+    id: int | None = Field(default=None, primary_key=True)
+    item_id: int = Field(index=True, foreign_key="item.id")
+    quantity: int = Field(ge=1)
+    amount: float = Field(default=0.0, ge=0)
+    payment_method: str | None = Field(default=None, max_length=20)
+    status_before: str = Field(default=ItemStatus.AVAILABLE.value, max_length=20)
+    sold_at: datetime | None = Field(default=None, sa_type=DateTime(timezone=True), nullable=True)

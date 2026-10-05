@@ -1391,3 +1391,189 @@ details[open] summary {
     bottom: 24px;
   }
 }
+
+/* ---------- Sell item ---------- */
+.item-row-actions {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.grid-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 0 10px 10px;
+}
+
+.grid-card .grid-card-actions .status-menu {
+  margin: 0;
+}
+
+.sell-controls {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+.sell-button {
+  min-height: 44px;
+  padding: 8px 14px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, #15803d, #16a34a);
+  white-space: nowrap;
+}
+
+.partial-sold {
+  font-size: 13px;
+  font-weight: 700;
+  color: #15803d;
+}
+
+.sell-controls.is-sold {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
+.sold-label {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-end;
+  font-weight: 800;
+  color: #15803d;
+}
+
+.payment-label {
+  font-weight: 600;
+  color: var(--muted-text);
+}
+
+.undo-sale-button {
+  min-height: 44px;
+  padding: 8px 12px;
+  white-space: nowrap;
+}
+
+.editor-sell {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 16px;
+  background: var(--soft-bg);
+}
+
+.editor-sell .sell-controls,
+.editor-sell .sell-controls.is-sold {
+  align-items: stretch;
+}
+
+.sell-large .sell-button {
+  width: 100%;
+  min-height: 56px;
+  font-size: 18px;
+}
+
+.sell-large.is-sold {
+  justify-content: space-between;
+}
+
+.sell-large .sold-label {
+  align-items: flex-start;
+  font-size: 18px;
+}
+
+.payment-choices {
+  margin: 0;
+  padding: 0;
+  border: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.payment-choices legend {
+  margin-bottom: 8px;
+  font-weight: 700;
+}
+
+.payment-chip {
+  min-height: 48px;
+  min-width: 72px;
+  font-size: 16px;
+}
+
+.sell-sheet {
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+}
+
+.sell-stepper {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.sell-stepper-label {
+  font-weight: 700;
+  margin-right: auto;
+}
+
+.sell-stepper .secondary-button {
+  min-width: 52px;
+  font-size: 22px;
+  padding: 6px 12px;
+}
+
+.sell-stepper-value {
+  min-width: 2ch;
+  text-align: center;
+  font-size: 22px;
+  font-weight: 800;
+}
+
+.sell-confirm {
+  min-height: 56px;
+  font-size: 18px;
+  background: linear-gradient(135deg, #15803d, #16a34a);
+}
+
+.payment-breakdown h3 {
+  margin: 16px 0 8px;
+  font-size: 16px;
+}
+
+.payment-breakdown ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.payment-breakdown li {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.payment-breakdown li span {
+  font-weight: 700;
+  min-width: 7em;
+}
+
+.payment-breakdown li strong {
+  margin-left: auto;
+}
+
+@media (max-width: 520px) {
+  .item-row-actions {
+    max-width: 44%;
+  }
+}

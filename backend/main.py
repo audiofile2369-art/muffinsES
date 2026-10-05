@@ -14,7 +14,8 @@ from sqlmodel import Session, select
 
 from backend.config.database import close_db, database, get_db
 from backend.config.settings import get_logger, get_settings
-from backend.core.models import Category, Item, ItemGalleryPhoto, ItemPhoto, Sale, Task
+from backend.core.models import Category, Item, ItemGalleryPhoto, ItemPhoto, ItemSaleEvent, ItemStatus, Sale, Task
+from backend.core.selling import load_sale_events, recorded_units, remaining_units, sold_fields
 from backend.core.pricing import (
     PricingConfigurationError,
     PricingEstimateService,
@@ -29,7 +30,10 @@ from backend.core.schemas import (
     CategoryUpdate,
     DashboardResponse,
     ItemCreate,
+    ItemPaymentMethodUpdate,
     ItemPhotoRead,
+    ItemSell,
+    ItemUnsell,
     PricingEstimateResponse,
     ItemQuantityIncrement,
     ItemRead,
@@ -181,8 +185,39 @@ def load_photo_fields(session: Session, item_ids: list[int]) -> dict[int, dict[s
 def build_item_read(session: Session, item: Item) -> ItemRead:
     """Serialize one item including its stored photo version and count."""
 
-    fields = load_photo_fields(session, [item.id]) if item.id is not None else {}
+    fields = load_item_fields(session, [item]) if item.id is not None else {}
     return ItemRead.model_validate(item, update=fields.get(item.id, {}))
+
+
+def load_item_fields(session: Session, items: list[Item]) -> dict[int, dict[str, object]]:
+    """Photo fields plus what has sold, per item, in a bounded number of queries."""
+
+    item_ids = [item.id for item in items if item.id is not None]
+    photo_fields = load_photo_fields(session, item_ids)
+    events = load_sale_events(session, item_ids)
+    return {
+        item.id: {**photo_fields.get(item.id, {}), **sold_fields(item, events.get(item.id, []))}
+        for item in items
+        if item.id is not None
+    }
+
+
+def clear_sales_if_unsold(session: Session, item: Item, new_status: ItemStatus | None) -> None:
+    """Setting a sold item back to any other status means the sale did not happen."""
+
+    if new_status is not None and item.status == ItemStatus.SOLD and new_status != ItemStatus.SOLD:
+        session.exec(delete(ItemSaleEvent).where(ItemSaleEvent.item_id == item.id))
+
+
+def lock_item_row(session: Session, item_id: int) -> None:
+    """Take the item row lock for this transaction (a no-op UPDATE).
+
+    Postgres makes a second tablet selling the same item wait here until the
+    first commits, and SQLite serialises writers, so the remaining-quantity
+    check that follows always sees every earlier sale: no overselling.
+    """
+
+    session.exec(update(Item).where(Item.id == item_id).values(quantity=Item.quantity))
 
 
 def read_valid_photo_bytes(photo: UploadFile) -> bytes:
@@ -308,7 +343,8 @@ def read_dashboard(session: Session = Depends(get_db)) -> DashboardResponse:
     for sale in sales:
         items = session.exec(select(Item).where(Item.sale_id == sale.id)).all()
         tasks = session.exec(select(Task).where(Task.sale_id == sale.id)).all()
-        summaries.append(build_sale_summary(sale, items, tasks))
+        events = load_sale_events(session, [item.id for item in items if item.id is not None])
+        summaries.append(build_sale_summary(sale, items, tasks, events))
     return DashboardResponse(sales=summaries)
 
 
@@ -347,8 +383,10 @@ def read_workspace(sale_id: int, session: Session = Depends(get_db)) -> Workspac
     """Return the full workspace payload for a sale."""
 
     sale, categories, items, tasks = load_workspace_records(session, sale_id)
-    photo_fields = load_photo_fields(session, [item.id for item in items if item.id is not None])
-    return build_workspace_response(sale, categories, items, tasks, photo_fields)
+    item_ids = [item.id for item in items if item.id is not None]
+    photo_fields = load_photo_fields(session, item_ids)
+    events = load_sale_events(session, item_ids)
+    return build_workspace_response(sale, categories, items, tasks, photo_fields, events)
 
 
 @app.get(f"{SETTINGS.api_prefix}/categories", response_model=list[CategoryRead])
@@ -410,12 +448,12 @@ def load_items_with_sale(session: Session, sale_id: int | None = None) -> list[I
     if sale_id is not None:
         statement = statement.where(Item.sale_id == sale_id)
     rows = session.exec(statement).all()
-    photo_fields = load_photo_fields(session, [item.id for item, _, _ in rows if item.id is not None])
+    item_fields = load_item_fields(session, [item for item, _, _ in rows])
     return [
         ItemWithSale.model_validate(
             item,
             update={
-                **photo_fields.get(item.id, {}),
+                **item_fields.get(item.id, {}),
                 "sale_title": sale_title,
                 "category_name": category_name,
             },
@@ -526,6 +564,7 @@ def update_item(
         get_category_or_404(session, payload.category_id)
 
     updates = payload.model_dump(exclude_unset=True)
+    clear_sales_if_unsold(session, item, updates.get("status"))
     for field_name, value in updates.items():
         setattr(item, field_name, value)
     session.add(item)
@@ -545,6 +584,7 @@ def delete_item(item_id: int, session: Session = Depends(get_db)) -> Response:
     item = get_item_or_404(session, item_id)
     session.exec(delete(ItemGalleryPhoto).where(ItemGalleryPhoto.item_id == item_id))
     session.exec(delete(ItemPhoto).where(ItemPhoto.item_id == item_id))
+    session.exec(delete(ItemSaleEvent).where(ItemSaleEvent.item_id == item_id))
     session.flush()
     session.delete(item)
     session.commit()
@@ -609,10 +649,116 @@ def update_item_status(
     overwrite the item's other fields.
     """
 
-    get_item_or_404(session, item_id)
+    item = get_item_or_404(session, item_id)
+    clear_sales_if_unsold(session, item, payload.status)
     session.exec(update(Item).where(Item.id == item_id).values(status=payload.status))
     session.commit()
     item = get_item_or_404(session, item_id)
+    session.refresh(item)
+    return build_item_read(session, item)
+
+
+@app.post(f"{SETTINGS.api_prefix}/items/{{item_id}}/sell", response_model=ItemRead)
+def sell_item(item_id: int, payload: ItemSell, session: Session = Depends(get_db)) -> ItemRead:
+    """Record a sale of `quantity` units at `unit_price` each (default: listed price).
+
+    Stored as one ItemSaleEvent whose `amount` is the total received. Selling the
+    last remaining unit sets the item to sold; fewer keeps its status. Selling
+    more than remain is refused (409), checked under the item row lock.
+    """
+
+    get_item_or_404(session, item_id)
+    lock_item_row(session, item_id)
+    item = get_item_or_404(session, item_id)
+    session.refresh(item)
+    events = load_sale_events(session, [item_id]).get(item_id, [])
+    remaining = remaining_units(item, events)
+    if payload.quantity > remaining:
+        session.rollback()
+        detail = "This item is already sold." if remaining == 0 else f"Only {remaining} left to sell."
+        raise HTTPException(status_code=409, detail=detail)
+    unit_price = payload.unit_price if payload.unit_price is not None else (item.price or 0.0)
+    session.add(
+        ItemSaleEvent(
+            item_id=item_id,
+            quantity=payload.quantity,
+            amount=round(unit_price * payload.quantity, 2),
+            payment_method=payload.payment_method.value,
+            status_before=item.status.value if item.status != ItemStatus.SOLD else ItemStatus.AVAILABLE.value,
+            sold_at=payload.sold_at or datetime.now(timezone.utc),
+        )
+    )
+    if recorded_units(events) + payload.quantity >= (item.quantity or 1):
+        item.status = ItemStatus.SOLD
+        session.add(item)
+    session.commit()
+    session.refresh(item)
+    return build_item_read(session, item)
+
+
+@app.post(f"{SETTINGS.api_prefix}/items/{{item_id}}/unsell", response_model=ItemRead)
+def unsell_item(item_id: int, payload: ItemUnsell, session: Session = Depends(get_db)) -> ItemRead:
+    """Undo one recorded sale (`event_id`) or every sale of the item.
+
+    A sold item goes back to the status it had before that sale (available
+    when unknown); a partly sold item keeps its status.
+    """
+
+    get_item_or_404(session, item_id)
+    lock_item_row(session, item_id)
+    item = get_item_or_404(session, item_id)
+    session.refresh(item)
+    events = load_sale_events(session, [item_id]).get(item_id, [])
+    if payload.event_id is not None:
+        removed = [event for event in events if event.id == payload.event_id]
+        if not removed:
+            session.rollback()
+            raise HTTPException(status_code=404, detail="Sale not found for this item.")
+    else:
+        removed = events
+    for event in removed:
+        session.delete(event)
+    if item.status == ItemStatus.SOLD:
+        before = removed[0].status_before if removed else ItemStatus.AVAILABLE.value
+        valid = {status.value for status in ItemStatus} - {ItemStatus.SOLD.value}
+        item.status = ItemStatus(before) if before in valid else ItemStatus.AVAILABLE
+        session.add(item)
+    session.commit()
+    session.refresh(item)
+    return build_item_read(session, item)
+
+
+@app.patch(f"{SETTINGS.api_prefix}/items/{{item_id}}/payment-method", response_model=ItemRead)
+def update_item_payment_method(
+    item_id: int, payload: ItemPaymentMethodUpdate, session: Session = Depends(get_db)
+) -> ItemRead:
+    """Correct how a sale was paid (default: the latest sale).
+
+    For an item marked sold before sales were recorded, this records that
+    sale (all units at the listed price, time unknown) with the given method.
+    """
+
+    item = get_item_or_404(session, item_id)
+    events = load_sale_events(session, [item_id]).get(item_id, [])
+    if payload.event_id is not None:
+        target = next((event for event in events if event.id == payload.event_id), None)
+        if target is None:
+            raise HTTPException(status_code=404, detail="Sale not found for this item.")
+    elif events:
+        target = events[-1]
+    elif item.status == ItemStatus.SOLD:
+        target = ItemSaleEvent(
+            item_id=item_id,
+            quantity=item.quantity or 1,
+            amount=round((item.price or 0.0) * (item.quantity or 1), 2),
+            status_before=ItemStatus.AVAILABLE.value,
+            sold_at=None,
+        )
+    else:
+        raise HTTPException(status_code=409, detail="This item has not been sold.")
+    target.payment_method = payload.payment_method.value
+    session.add(target)
+    session.commit()
     session.refresh(item)
     return build_item_read(session, item)
 
@@ -631,6 +777,7 @@ def bulk_update_items(
     for item_id in payload.item_ids:
         item = get_item_or_404(session, item_id)
         if payload.status is not None:
+            clear_sales_if_unsold(session, item, payload.status)
             item.status = payload.status
         if payload.category_id is not None:
             item.category_id = payload.category_id
@@ -640,9 +787,9 @@ def bulk_update_items(
     session.commit()
     for item in updated_items:
         session.refresh(item)
-    photo_fields = load_photo_fields(session, [item.id for item in updated_items if item.id is not None])
+    item_fields = load_item_fields(session, updated_items)
     return [
-        ItemRead.model_validate(item, update=photo_fields.get(item.id, {}))
+        ItemRead.model_validate(item, update=item_fields.get(item.id, {}))
         for item in updated_items
     ]
 

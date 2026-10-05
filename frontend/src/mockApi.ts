@@ -9,7 +9,9 @@ import type {
   ItemRead,
   ItemStatus,
   ItemPartialUpdatePayload,
+  ItemSellPayload,
   ItemUpdatePayload,
+  PaymentMethod,
   ItemWithSale,
   ReportMetrics,
   RoomBreakdown,
@@ -379,6 +381,76 @@ export async function decrementItemQuantity(itemId: number, amount: number): Pro
   }
 
   item.quantity = Math.max(1, (item.quantity ?? 1) - amount)
+  saveState(state)
+  return item
+}
+
+function findMockItem(itemId: number): { state: ReturnType<typeof loadState>; item: ItemRead } {
+  const state = loadState()
+  const item = state.items.find((currentItem) => currentItem.id === itemId)
+  if (!item) {
+    throw new Error('Item not found.')
+  }
+  return { state, item }
+}
+
+/** Browser-demo version of selling: sale rows kept on the item itself. */
+export async function sellItem(itemId: number, payload: ItemSellPayload): Promise<ItemRead> {
+  const { state, item } = findMockItem(itemId)
+  const events = item.sale_events ?? []
+  const sold = events.reduce((sum, event) => sum + event.quantity, 0)
+  const remaining = item.status === 'sold' ? 0 : Math.max(0, (item.quantity ?? 1) - sold)
+  if (payload.quantity > remaining) {
+    throw new Error(remaining === 0 ? 'This item is already sold.' : `Only ${remaining} left to sell.`)
+  }
+  const unitPrice = payload.unit_price ?? item.price ?? 0
+  const event = {
+    id: Date.now(),
+    quantity: payload.quantity,
+    amount: Number((unitPrice * payload.quantity).toFixed(2)),
+    payment_method: payload.payment_method,
+    sold_at: payload.sold_at ?? new Date().toISOString(),
+  }
+  item.sale_events = [...events, event]
+  item.sold_quantity = sold + payload.quantity
+  item.sold_total = item.sale_events.reduce((sum, saleEvent) => sum + saleEvent.amount, 0)
+  item.sold_at = event.sold_at
+  item.payment_method = event.payment_method
+  if (item.sold_quantity >= (item.quantity ?? 1)) {
+    item.status = 'sold'
+  }
+  saveState(state)
+  return item
+}
+
+export async function unsellItem(itemId: number, eventId: number | null): Promise<ItemRead> {
+  const { state, item } = findMockItem(itemId)
+  const events = (item.sale_events ?? []).filter((event) => eventId !== null && event.id !== eventId)
+  item.sale_events = events
+  item.sold_quantity = events.reduce((sum, event) => sum + event.quantity, 0)
+  item.sold_total = events.length ? events.reduce((sum, event) => sum + event.amount, 0) : null
+  item.sold_at = events.at(-1)?.sold_at ?? null
+  item.payment_method = events.at(-1)?.payment_method ?? null
+  if (item.status === 'sold') {
+    item.status = 'available'
+  }
+  saveState(state)
+  return item
+}
+
+export async function updateItemPaymentMethod(
+  itemId: number,
+  paymentMethod: PaymentMethod,
+  eventId: number | null,
+): Promise<ItemRead> {
+  const { state, item } = findMockItem(itemId)
+  const events = item.sale_events ?? []
+  const target = eventId === null ? events.at(-1) : events.find((event) => event.id === eventId)
+  if (!target) {
+    throw new Error('This item has not been sold.')
+  }
+  target.payment_method = paymentMethod
+  item.payment_method = events.at(-1)?.payment_method ?? null
   saveState(state)
   return item
 }

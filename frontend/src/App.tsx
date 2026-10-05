@@ -15,6 +15,7 @@ import {
   incrementItemQuantity,
   decrementItemQuantity,
   updateItemStatus,
+  updateItemPaymentMethod,
   updateCategory,
   updateItem,
   updateSale,
@@ -28,6 +29,9 @@ import { ItemThumbnail } from './ItemThumbnail'
 import { PhotoSearchButton, PhotoSearchPanel } from './PhotoSearch'
 import { QuickNav } from './QuickNav'
 import { StatusMenu } from './StatusMenu'
+import { SellControls } from './SellControls'
+import { PAYMENT_METHODS, paymentLabel, remainingUnits, restoreSales, soldUnits } from './selling'
+import { useSellFlow } from './useSellFlow'
 import { ToastHost } from './ToastHost'
 import { flushToast, showToast } from './toast'
 import { buildRouteHash, parseRouteHash } from './routes'
@@ -43,6 +47,7 @@ import type {
   ItemStatus,
   ItemUpdatePayload,
   ItemWithSale,
+  PaymentMethod,
   PricingEstimateResponse,
   SalePayload,
   SaleStatus,
@@ -531,6 +536,20 @@ function App() {
     })
   }, [])
 
+  /** An item changed by selling (or undoing a sale): into the list, editor kept in step, totals refreshed. */
+  const applySoldItem = useCallback(
+    (item: ItemRead): void => {
+      upsertItem(item)
+      const syncStatus = (current: ItemFormState): ItemFormState =>
+        current.id === item.id ? { ...current, status: item.status } : current
+      setItemForm(syncStatus)
+      setItemBaseline(syncStatus)
+      afterLocalChange(item.sale_id)
+    },
+    [afterLocalChange, upsertItem],
+  )
+  const sellFlow = useSellFlow(applySoldItem, setErrorMessage)
+
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
       const initialRoute = parseRouteHash(window.location.hash)
@@ -984,7 +1003,19 @@ function App() {
       if (withUndo) {
         showToast({
           message: `"${saved.title}" marked ${titleCase(status)}`,
-          onUndo: () => void changeItemStatus(saved, previous, false),
+          onUndo: () => {
+            const previousEvents = item.sale_events ?? []
+            if (previous === 'sold' && previousEvents.length > 0) {
+              // The server cleared the sales when the item left "sold"; put each one back as it was.
+              void restoreSales(saved, previousEvents)
+                .then(applySoldItem)
+                .catch((error: unknown) =>
+                  setErrorMessage(`Could not undo: ${error instanceof Error ? error.message : 'unknown error'}`),
+                )
+            } else {
+              void changeItemStatus(saved, previous, false)
+            }
+          },
         })
       }
       return true
@@ -1190,7 +1221,21 @@ function App() {
     }
 
     const rows = [
-      ['Title', 'Category', 'Room', 'Condition', 'Price', 'Quantity', 'Status', 'Description', 'Notes'],
+      [
+        'Title',
+        'Category',
+        'Room',
+        'Condition',
+        'Price',
+        'Quantity',
+        'Status',
+        'Description',
+        'Notes',
+        'Sold qty',
+        'Sold price (total received)',
+        'Sold at',
+        'Payment method',
+      ],
       ...filteredItems.map((item) => [
         item.title,
         categoryLookup.get(item.category_id ?? -1) ?? 'Uncategorized',
@@ -1201,6 +1246,10 @@ function App() {
         item.status,
         item.description,
         item.notes,
+        String(soldUnits(item)),
+        item.sold_total === null || item.sold_total === undefined ? '' : String(item.sold_total),
+        item.sold_at ?? '',
+        soldUnits(item) > 0 ? paymentLabel(item.payment_method) : '',
       ]),
     ]
 
@@ -1333,8 +1382,49 @@ function App() {
   }
 
 
+  const editingItem = itemForm.id === null ? undefined : workspace?.items.find((item) => item.id === itemForm.id)
+
+  /** Correct how the latest sale (or an older, unrecorded one) was paid. */
+  async function changePaymentMethod(item: ItemRead, method: PaymentMethod): Promise<void> {
+    try {
+      applySoldItem(await updateItemPaymentMethod(item.id, method))
+    } catch (error) {
+      setErrorMessage(`Could not change the payment method: ${error instanceof Error ? error.message : 'unknown error'}`)
+    }
+  }
+
   const itemEditorForm = (
     <form className="stack-form" onSubmit={(event) => void handleItemSubmit(event)}>
+      {editingItem ? (
+        <div className="editor-sell">
+          <SellControls
+            item={editingItem}
+            large
+            onSell={(target) => sellFlow.openSell(target)}
+            onUndoSale={(target) => void sellFlow.undoSale(target)}
+          />
+          {soldUnits(editingItem) > 0 ? (
+            <fieldset className="payment-choices">
+              <legend>
+                {soldUnits(editingItem)} sold for {formatCurrency(editingItem.sold_total ?? 0)} · paid by
+              </legend>
+              <div className="chip-row">
+                {PAYMENT_METHODS.map((option) => (
+                  <button
+                    type="button"
+                    key={option.key}
+                    className={`chip payment-chip ${editingItem.payment_method === option.key ? 'active' : ''}`}
+                    aria-pressed={editingItem.payment_method === option.key}
+                    onClick={() => void changePaymentMethod(editingItem, option.key)}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            </fieldset>
+          ) : null}
+        </div>
+      ) : null}
       <ItemPhotosPanel
         key={itemForm.id ?? 'new'}
         itemId={itemForm.id}
@@ -1820,11 +1910,22 @@ function App() {
                           </strong>
                         </div>
                       </button>
-                      <StatusMenu
-                        status={item.status}
-                        itemTitle={item.title}
-                        onChange={(status) => void changeItemStatus(item, status)}
-                      />
+                      <div className="item-row-actions">
+                        <StatusMenu
+                          status={item.status}
+                          itemTitle={item.title}
+                          onChange={(status) =>
+                            status === 'sold'
+                              ? sellFlow.openSell(item, remainingUnits(item))
+                              : void changeItemStatus(item, status)
+                          }
+                        />
+                        <SellControls
+                          item={item}
+                          onSell={(target) => sellFlow.openSell(target)}
+                          onUndoSale={(target) => void sellFlow.undoSale(target)}
+                        />
+                      </div>
                     </div>
                     {itemForm.id === item.id ? <div className="item-inline-editor">{itemEditorForm}</div> : null}
                     </Fragment>
@@ -2124,7 +2225,27 @@ function App() {
                   <span>Sold value</span>
                   <strong>{formatCurrency(workspace.report.total_sold_value)}</strong>
                 </div>
+                <div className="report-card">
+                  <span>Still for sale</span>
+                  <strong>{formatCurrency(workspace.report.total_remaining_value ?? 0)}</strong>
+                </div>
               </div>
+              {workspace.report.payment_breakdown?.length ? (
+                <div className="payment-breakdown">
+                  <h3>Received by payment method</h3>
+                  <ul>
+                    {workspace.report.payment_breakdown.map((row) => (
+                      <li key={row.payment_method ?? 'none'}>
+                        <span>{paymentLabel(row.payment_method)}</span>
+                        <small>
+                          {row.sale_count} {row.sale_count === 1 ? 'sale' : 'sales'}
+                        </small>
+                        <strong>{formatCurrency(row.total)}</strong>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
             </div>
           </details>
         </>
@@ -2192,6 +2313,8 @@ function App() {
           </div>
         </div>
       ) : null}
+
+      {sellFlow.sheet}
 
       {discardPrompt ? (
         <div className="modal-backdrop" onClick={() => discardPrompt.resolve(false)}>

@@ -4,6 +4,9 @@ import { formatCurrency, itemMatchesSearch, searchTerms, titleCase } from './for
 import { ItemThumbnail } from './ItemThumbnail'
 import { PhotoSearchButton, PhotoSearchPanel } from './PhotoSearch'
 import { StatusMenu } from './StatusMenu'
+import { SellControls } from './SellControls'
+import { remainingUnits, restoreSales } from './selling'
+import { useSellFlow } from './useSellFlow'
 import { showToast } from './toast'
 import type { PhotoViewerState } from './ItemThumbnail'
 import type { ItemRead, ItemStatus, ItemWithSale } from './types'
@@ -80,6 +83,22 @@ export function AllItemsView({ onOpenItem, onOpenPhoto, onItemChanged }: AllItem
     }
   }, [])
 
+  function applySaved(saved: ItemRead): void {
+    setItems((current) =>
+      current.map((existing) => (existing.id === saved.id ? { ...existing, ...saved } : existing)),
+    )
+    onItemChanged?.(saved)
+  }
+  const sellFlow = useSellFlow(applySaved, setError)
+
+  function changeOrSell(item: ItemWithSale, status: ItemStatus): void {
+    if (status === 'sold') {
+      sellFlow.openSell(item, remainingUnits(item))
+    } else {
+      void changeStatus(item, status)
+    }
+  }
+
   /** One-tap status change: shown at once, status-only save, put back if it fails. */
   async function changeStatus(item: ItemWithSale, status: ItemStatus, withUndo = true): Promise<void> {
     const previous = item.status
@@ -99,7 +118,18 @@ export function AllItemsView({ onOpenItem, onOpenPhoto, onItemChanged }: AllItem
       if (withUndo) {
         showToast({
           message: `"${saved.title}" marked ${titleCase(status)}`,
-          onUndo: () => void changeStatus({ ...item, status }, previous, false),
+          onUndo: () => {
+            const previousEvents = item.sale_events ?? []
+            if (previous === 'sold' && previousEvents.length > 0) {
+              void restoreSales(saved, previousEvents)
+                .then(applySaved)
+                .catch((undoError: unknown) =>
+                  setError(`Could not undo: ${undoError instanceof Error ? undoError.message : 'unknown error'}`),
+                )
+            } else {
+              void changeStatus({ ...item, status }, previous, false)
+            }
+          },
         })
       }
     } catch (changeError) {
@@ -313,11 +343,14 @@ export function AllItemsView({ onOpenItem, onOpenPhoto, onItemChanged }: AllItem
                   </strong>
                 </div>
               </button>
-              <StatusMenu
-                status={item.status}
-                itemTitle={item.title}
-                onChange={(status) => void changeStatus(item, status)}
-              />
+              <div className="item-row-actions">
+                <StatusMenu status={item.status} itemTitle={item.title} onChange={(status) => changeOrSell(item, status)} />
+                <SellControls
+                  item={item}
+                  onSell={(target) => sellFlow.openSell(target)}
+                  onUndoSale={(target) => void sellFlow.undoSale(target)}
+                />
+              </div>
             </div>
           ))}
         </div>
@@ -336,17 +369,21 @@ export function AllItemsView({ onOpenItem, onOpenPhoto, onItemChanged }: AllItem
                   </strong>
                 </span>
               </button>
-              <StatusMenu
-                status={item.status}
-                itemTitle={item.title}
-                onChange={(status) => void changeStatus(item, status)}
-              />
+              <div className="grid-card-actions">
+                <StatusMenu status={item.status} itemTitle={item.title} onChange={(status) => changeOrSell(item, status)} />
+                <SellControls
+                  item={item}
+                  onSell={(target) => sellFlow.openSell(target)}
+                  onUndoSale={(target) => void sellFlow.undoSale(target)}
+                />
+              </div>
             </div>
           ))}
         </div>
       )}
       </>
       )}
+      {sellFlow.sheet}
     </section>
   )
 }

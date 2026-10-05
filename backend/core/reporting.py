@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from collections import defaultdict
 
-from backend.core.models import Category, Item, ItemStatus, Sale, Task, TaskStatus
+from backend.core.models import Category, Item, ItemSaleEvent, ItemStatus, Sale, Task, TaskStatus
+from backend.core.selling import STILL_FOR_SALE, sold_fields, sold_state
 from backend.core.schemas import (
     CategoryBreakdown,
     CategoryRead,
     ItemRead,
+    PaymentBreakdown,
     ReportMetrics,
     RoomBreakdown,
     SaleRead,
@@ -24,8 +26,19 @@ def item_value(item: Item) -> float:
     return (item.price or 0.0) * (item.quantity or 1)
 
 
-def build_sale_summary(sale: Sale, items: list[Item], tasks: list[Task]) -> SaleSummary:
-    """Build dashboard metrics for a single sale."""
+def build_sale_summary(
+    sale: Sale,
+    items: list[Item],
+    tasks: list[Task],
+    events: dict[int, list[ItemSaleEvent]] | None = None,
+) -> SaleSummary:
+    """Build dashboard metrics for a single sale.
+
+    `estimated_revenue` is listed value (price x quantity, all units);
+    `realized_revenue` is money actually received (see backend/core/selling.py).
+    """
+
+    sale_events = events or {}
 
     priced_items = [item for item in items if item.price is not None]
     sold_items = [item for item in items if item.status == ItemStatus.SOLD]
@@ -43,12 +56,25 @@ def build_sale_summary(sale: Sale, items: list[Item], tasks: list[Task]) -> Sale
         sold_count=len(sold_items),
         pending_task_count=len(pending_tasks),
         estimated_revenue=round(sum(item_value(item) for item in items), 2),
-        realized_revenue=round(sum(item_value(item) for item in sold_items), 2),
+        realized_revenue=round(
+            sum(sold_state(item, sale_events.get(item.id, [])).sold_total or 0.0 for item in items), 2
+        ),
     )
 
 
-def build_report_metrics(items: list[Item], categories: list[Category]) -> ReportMetrics:
-    """Build report metrics for a sale workspace."""
+def build_report_metrics(
+    items: list[Item],
+    categories: list[Category],
+    events: dict[int, list[ItemSaleEvent]] | None = None,
+) -> ReportMetrics:
+    """Build report metrics for a sale workspace.
+
+    Sold values are money actually received; listed values are price x quantity;
+    remaining value is price x unsold units of items still for sale.
+    """
+
+    sale_events = events or {}
+    states = {item.id: sold_state(item, sale_events.get(item.id, [])) for item in items}
 
     category_lookup = {category.id: category.name for category in categories}
     category_rollups: dict[str, dict[str, float | int]] = defaultdict(
@@ -68,7 +94,7 @@ def build_report_metrics(items: list[Item], categories: list[Category]) -> Repor
 
         if item.status == ItemStatus.SOLD:
             category_rollups[category_name]["sold_count"] += 1
-            category_rollups[category_name]["sold_value"] += item_value(item)
+        category_rollups[category_name]["sold_value"] += states[item.id].sold_total or 0.0
 
     category_breakdown = [
         CategoryBreakdown(
@@ -101,9 +127,27 @@ def build_report_metrics(items: list[Item], categories: list[Category]) -> Repor
     priced_items = len([item for item in items if item.price is not None])
     sold_items = len([item for item in items if item.status == ItemStatus.SOLD])
     total_listed_value = round(sum(item_value(item) for item in items), 2)
-    total_sold_value = round(
-        sum(item_value(item) for item in items if item.status == ItemStatus.SOLD), 2
+    total_sold_value = round(sum(state.sold_total or 0.0 for state in states.values()), 2)
+    total_remaining_value = round(
+        sum(
+            (item.price or 0.0) * max(0, (item.quantity or 1) - states[item.id].sold_quantity)
+            for item in items
+            if item.status in STILL_FOR_SALE
+        ),
+        2,
     )
+    payment_rollups: dict[str | None, list[float]] = {}
+    for state in states.values():
+        for method, amount in state.payments:
+            rollup = payment_rollups.setdefault(method, [0, 0.0])
+            rollup[0] += 1
+            rollup[1] += amount
+    payment_breakdown = [
+        PaymentBreakdown(payment_method=method, sale_count=int(count), total=round(total, 2))
+        for method, (count, total) in sorted(
+            payment_rollups.items(), key=lambda entry: entry[1][1], reverse=True
+        )
+    ]
     sell_through_rate = round((sold_items / total_items) * 100, 1) if total_items else 0.0
 
     return ReportMetrics(
@@ -115,6 +159,9 @@ def build_report_metrics(items: list[Item], categories: list[Category]) -> Repor
         sell_through_rate=sell_through_rate,
         category_breakdown=category_breakdown,
         room_breakdown=room_breakdown,
+        total_remaining_value=total_remaining_value,
+        sold_units=sum(state.sold_quantity for state in states.values()),
+        payment_breakdown=payment_breakdown,
     )
 
 
@@ -124,18 +171,22 @@ def build_workspace_response(
     items: list[Item],
     tasks: list[Task],
     photo_fields: dict[int, dict[str, object]] | None = None,
+    events: dict[int, list[ItemSaleEvent]] | None = None,
 ) -> WorkspaceResponse:
     """Build the complete workspace payload consumed by the frontend."""
 
     fields = photo_fields or {}
+    sale_events = events or {}
     return WorkspaceResponse(
         sale=SaleRead.model_validate(sale),
-        summary=build_sale_summary(sale, items, tasks),
+        summary=build_sale_summary(sale, items, tasks, sale_events),
         categories=[CategoryRead.model_validate(category) for category in categories],
         items=[
-            ItemRead.model_validate(item, update=fields.get(item.id, {}))
+            ItemRead.model_validate(
+                item, update={**fields.get(item.id, {}), **sold_fields(item, sale_events.get(item.id, []))}
+            )
             for item in items
         ],
         tasks=[TaskRead.model_validate(task) for task in tasks],
-        report=build_report_metrics(items, categories),
+        report=build_report_metrics(items, categories, sale_events),
     )
