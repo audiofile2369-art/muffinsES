@@ -5,6 +5,7 @@ import type {
   CategoryRead,
   DashboardResponse,
   ItemPayload,
+  ItemPhotoInfo,
   ItemRead,
   ItemUpdatePayload,
   ItemWithSale,
@@ -315,11 +316,21 @@ export async function createItem(payload: ItemPayload): Promise<ItemRead> {
   const item: ItemRead = {
     id: state.nextIds.item,
     ...payload,
+    photo_count: 0,
   }
   state.nextIds.item += 1
   state.items.push(item)
   saveState(state)
   return item
+}
+
+/** Browser demo mode never stores photos, so every item's photo list is empty. */
+export async function listItemPhotos(itemId: number): Promise<ItemPhotoInfo[]> {
+  const state = loadState()
+  if (!state.items.some((item) => item.id === itemId)) {
+    throw new Error('Item not found.')
+  }
+  return []
 }
 
 export async function updateItem(itemId: number, payload: ItemUpdatePayload): Promise<ItemRead> {

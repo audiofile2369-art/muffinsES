@@ -330,4 +330,200 @@ def test_all_items_lists_every_sale_with_names_and_photo_versions() -> None:
     assert "created_at" in body[created_ids[0]]
     assert all("photo_data" not in item and "data" not in item for item in body.values())
     selects = [sql for sql in statements if sql.lstrip().upper().startswith("SELECT")]
-    assert len(selects) <= 2
+    assert len(selects) <= 3  # items, main photo versions, extra photo counts
+
+
+def _add_photo(client: TestClient, item_id: int, data: bytes = JPEG_BYTES, content_type: str = "image/jpeg"):
+    return client.post(
+        f"/api/items/{item_id}/photos",
+        files={"photo": ("photo", data, content_type)},
+    )
+
+
+def test_item_can_have_several_photos_listed_fetched_and_deleted() -> None:
+    """Photos added to an item are listed main-first, served, and removable one by one."""
+
+    with TestClient(app) as client:
+        _, item_id = _create_sale_and_item(client)
+        assert client.get(f"/api/items/{item_id}/photos").json() == []
+
+        first = _add_photo(client, item_id, JPEG_BYTES, "image/jpeg")
+        assert first.status_code == 200
+        assert first.json()["photo_count"] == 1
+        main_version = first.json()["photo_version"]
+        assert main_version
+        second = _add_photo(client, item_id, PNG_BYTES, "image/png")
+        third = _add_photo(client, item_id, b"RIFF" + b"\x01" * 40, "image/webp")
+        assert third.json()["photo_count"] == 3
+        # Adding extra photos never changes the main photo.
+        assert second.json()["photo_version"] == main_version == third.json()["photo_version"]
+
+        photos = client.get(f"/api/items/{item_id}/photos").json()
+        assert [photo["is_main"] for photo in photos] == [True, False, False]
+        assert photos[0]["id"] is None
+        assert all("data" not in photo for photo in photos)
+
+        assert client.get(f"/api/items/{item_id}/photo").content == JPEG_BYTES
+        extra = client.get(f"/api/items/{item_id}/photos/{photos[1]['id']}")
+        assert extra.status_code == 200
+        assert extra.content == PNG_BYTES
+        assert extra.headers["content-type"] == "image/png"
+        assert "max-age" in extra.headers["cache-control"]
+
+        deleted = client.delete(f"/api/items/{item_id}/photos/{photos[1]['id']}")
+        assert deleted.status_code == 200
+        assert deleted.json()["photo_count"] == 2
+        assert client.get(f"/api/items/{item_id}/photos/{photos[1]['id']}").status_code == 404
+
+        # Removing the main photo promotes the next one instead of losing it.
+        removed_main = client.delete(f"/api/items/{item_id}/photo")
+        assert removed_main.json()["photo_count"] == 1
+        assert removed_main.json()["photo_version"] is not None
+        assert client.get(f"/api/items/{item_id}/photo").content.startswith(b"RIFF")
+        assert len(client.get(f"/api/items/{item_id}/photos").json()) == 1
+
+
+def test_set_main_photo_swaps_and_changes_the_thumbnail_version() -> None:
+    """Choosing another main photo swaps it with the old main, keeping both photos."""
+
+    with TestClient(app) as client:
+        sale_id, item_id = _create_sale_and_item(client)
+        _add_photo(client, item_id, JPEG_BYTES, "image/jpeg")
+        _add_photo(client, item_id, PNG_BYTES, "image/png")
+        before = client.get(f"/api/items/{item_id}/photos").json()
+        extra_id = before[1]["id"]
+
+        result = client.post(f"/api/items/{item_id}/photos/{extra_id}/main")
+        assert result.status_code == 200
+        assert result.json()["photo_count"] == 2
+        assert result.json()["photo_version"] != before[0]["version"]
+
+        assert client.get(f"/api/items/{item_id}/photo").content == PNG_BYTES
+        assert client.get(f"/api/items/{item_id}/photos/{extra_id}").content == JPEG_BYTES
+        after = client.get(f"/api/items/{item_id}/photos").json()
+        assert after[1]["version"] != before[1]["version"]
+
+        listed = client.get(f"/api/sales/{sale_id}/workspace").json()["items"][0]
+        assert listed["photo_version"] == result.json()["photo_version"]
+
+        assert client.post(f"/api/items/{item_id}/photos/999999/main").status_code == 404
+
+
+def test_item_photos_enforce_cap_type_size_and_missing_items() -> None:
+    """The photo gallery validates like the single photo and caps photos per item."""
+
+    from backend.main import MAX_PHOTOS_PER_ITEM
+
+    with TestClient(app) as client:
+        _, item_id = _create_sale_and_item(client)
+        _, other_item_id = _create_sale_and_item(client)
+
+        bad_type = _add_photo(client, item_id, b"hello", "text/plain")
+        assert bad_type.status_code == 400
+        assert "JPG" in bad_type.json()["detail"]
+        too_large = _add_photo(client, item_id, b"\xff" * (1024 * 1024 + 1), "image/jpeg")
+        assert too_large.status_code == 413
+        assert "1 MB" in too_large.json()["detail"]
+        assert _add_photo(client, 999999).status_code == 404
+        assert client.get("/api/items/999999/photos").status_code == 404
+
+        for _ in range(MAX_PHOTOS_PER_ITEM):
+            assert _add_photo(client, item_id).status_code == 200
+        capped = _add_photo(client, item_id)
+        assert capped.status_code == 400
+        assert str(MAX_PHOTOS_PER_ITEM) in capped.json()["detail"]
+
+        # A photo id that belongs to another item is not reachable through this one.
+        extra_id = client.get(f"/api/items/{item_id}/photos").json()[1]["id"]
+        assert client.get(f"/api/items/{other_item_id}/photos/{extra_id}").status_code == 404
+        assert client.delete(f"/api/items/{other_item_id}/photos/{extra_id}").status_code == 404
+
+
+def test_old_single_photo_is_still_served_and_counted() -> None:
+    """A photo stored the old way (PUT /photo) stays the main photo and counts once."""
+
+    with TestClient(app) as client:
+        sale_id, item_id = _create_sale_and_item(client)
+        client.put(f"/api/items/{item_id}/photo", files={"photo": ("lamp.jpg", JPEG_BYTES, "image/jpeg")})
+        listed = client.get(f"/api/sales/{sale_id}/workspace").json()["items"][0]
+        assert listed["photo_count"] == 1
+        assert listed["photo_version"]
+        photos = client.get(f"/api/items/{item_id}/photos").json()
+        assert photos == [{"id": None, "is_main": True, "version": listed["photo_version"]}]
+        assert client.get(f"/api/items/{item_id}/photo").content == JPEG_BYTES
+        added = _add_photo(client, item_id, PNG_BYTES, "image/png")
+        assert added.json()["photo_count"] == 2
+        assert added.json()["photo_version"] == listed["photo_version"]
+
+
+def test_item_lists_report_photo_counts_in_a_bounded_number_of_queries() -> None:
+    """Listing items carries photo counts without one query per item."""
+
+    from sqlalchemy import event
+
+    from backend.config.database import database
+
+    statements: list[str] = []
+
+    def count_statement(*_args) -> None:
+        statements.append("q")
+
+    with TestClient(app) as client:
+        sale_id, item_id = _create_sale_and_item(client)
+        _add_photo(client, item_id)
+        _add_photo(client, item_id)
+
+        def measure(path: str) -> int:
+            statements.clear()
+            event.listen(database.engine, "before_cursor_execute", count_statement)
+            try:
+                assert client.get(path).status_code == 200
+            finally:
+                event.remove(database.engine, "before_cursor_execute", count_statement)
+            return len(statements)
+
+        workspace_small = measure(f"/api/sales/{sale_id}/workspace")
+        all_small = measure("/api/items")
+        for index in range(6):
+            new_id = client.post("/api/items", json={"sale_id": sale_id, "title": f"Chair {index}"}).json()["id"]
+            _add_photo(client, new_id)
+            _add_photo(client, new_id)
+        assert measure(f"/api/sales/{sale_id}/workspace") == workspace_small
+        assert measure("/api/items") == all_small
+
+        counts = {item["id"]: item["photo_count"] for item in client.get("/api/items").json()}
+        assert counts[item_id] == 2
+        workspace_counts = {
+            item["id"]: item["photo_count"] for item in client.get(f"/api/sales/{sale_id}/workspace").json()["items"]
+        }
+        assert list(workspace_counts.values()).count(2) == 7
+
+
+def test_gallery_table_is_added_without_touching_existing_photos(tmp_path: Path) -> None:
+    """`create_all` on a database with old single photos adds the gallery table and keeps them."""
+
+    import sqlite3
+
+    from sqlmodel import SQLModel, create_engine
+
+    db_path = tmp_path / "old-photos.db"
+    with sqlite3.connect(db_path) as connection:
+        connection.execute("CREATE TABLE item (id INTEGER PRIMARY KEY, sale_id INTEGER NOT NULL, title VARCHAR NOT NULL)")
+        connection.execute(
+            "CREATE TABLE itemphoto (item_id INTEGER PRIMARY KEY, content_type VARCHAR(40) NOT NULL,"
+            " data BLOB NOT NULL, updated_at DATETIME NOT NULL)"
+        )
+        connection.execute("INSERT INTO item (id, sale_id, title) VALUES (1, 1, 'Old lamp')")
+        connection.execute(
+            "INSERT INTO itemphoto VALUES (1, 'image/jpeg', ?, '2026-01-01 00:00:00')", (JPEG_BYTES,)
+        )
+
+    engine = create_engine(f"sqlite:///{db_path}")
+    try:
+        SQLModel.metadata.create_all(engine)
+    finally:
+        engine.dispose()
+
+    with sqlite3.connect(db_path) as connection:
+        assert connection.execute("SELECT item_id, data FROM itemphoto").fetchall() == [(1, JPEG_BYTES)]
+        assert connection.execute("SELECT COUNT(*) FROM itemgalleryphoto").fetchone() == (0,)

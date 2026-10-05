@@ -123,17 +123,17 @@ def build_workspace_response(
     categories: list[Category],
     items: list[Item],
     tasks: list[Task],
-    photo_versions: dict[int, str] | None = None,
+    photo_fields: dict[int, dict[str, object]] | None = None,
 ) -> WorkspaceResponse:
     """Build the complete workspace payload consumed by the frontend."""
 
-    versions = photo_versions or {}
+    fields = photo_fields or {}
     return WorkspaceResponse(
         sale=SaleRead.model_validate(sale),
         summary=build_sale_summary(sale, items, tasks),
         categories=[CategoryRead.model_validate(category) for category in categories],
         items=[
-            ItemRead.model_validate(item, update={"photo_version": versions.get(item.id)})
+            ItemRead.model_validate(item, update=fields.get(item.id, {}))
             for item in items
         ],
         tasks=[TaskRead.model_validate(task) for task in tasks],

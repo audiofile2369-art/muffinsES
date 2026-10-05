@@ -5,7 +5,7 @@ import {
   createItem,
   createSale,
   createTask,
-  deleteItemPhoto,
+  addItemPhoto,
   estimatePriceFromPhoto,
   getDashboard,
   getItemPhotoUrl,
@@ -16,16 +16,17 @@ import {
   updateItem,
   updateSale,
   updateTask,
-  uploadItemPhoto,
 } from './api'
 import './App.css'
 import { formatCurrency, itemMatchesSearch, searchTerms, titleCase } from './format'
 import { AllItemsView } from './AllItemsView'
+import { ItemPhotosPanel } from './ItemPhotosPanel'
 import { ItemThumbnail } from './ItemThumbnail'
 import { QuickNav } from './QuickNav'
 import { buildRouteHash, parseRouteHash } from './routes'
 import type { AppRoute, AppView, SaleSection } from './routes'
-import type { PhotoViewerState } from './ItemThumbnail'
+import { stepPhotoViewer } from './photoViewer'
+import type { PhotoViewerState } from './photoViewer'
 import type {
   CategoryRead,
   DashboardResponse,
@@ -257,8 +258,8 @@ function App() {
   const [pricingAnswers, setPricingAnswers] = useState('')
   const [pricingLoading, setPricingLoading] = useState(false)
   const [pricingError, setPricingError] = useState('')
-  const [storedPhotoUrl, setStoredPhotoUrl] = useState<string | null>(null)
-  const [removeStoredPhoto, setRemoveStoredPhoto] = useState(false)
+  // Photos picked in the Photos area for a new item; uploaded right after it is created.
+  const [queuedPhotos, setQueuedPhotos] = useState<File[]>([])
   const [photoViewer, setPhotoViewer] = useState<PhotoViewerState | null>(null)
   const [duplicatePrompt, setDuplicatePrompt] = useState<DuplicatePromptState | null>(null)
   const [view, setView] = useState<AppView>(() => parseRouteHash(window.location.hash).view)
@@ -322,8 +323,7 @@ function App() {
     setPricingAnswers('')
     setPricingError('')
     setPricingLoading(false)
-    setStoredPhotoUrl(null)
-    setRemoveStoredPhoto(false)
+    setQueuedPhotos([])
     pricingAutofillRef.current = {}
   }, [])
 
@@ -336,6 +336,8 @@ function App() {
       if (event.key === 'Escape') {
         setPhotoViewer(null)
         setDuplicatePrompt(null)
+      } else if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+        setPhotoViewer((current) => stepPhotoViewer(current, event.key === 'ArrowLeft' ? -1 : 1))
       }
     }
 
@@ -544,7 +546,6 @@ function App() {
 
     setPricingImageFile(file)
     setPricingPreviewUrl(URL.createObjectURL(file))
-    setRemoveStoredPhoto(false)
     setPricingEstimate(null)
     setPricingAnswers('')
     await requestPriceEstimate(file, '')
@@ -677,6 +678,7 @@ function App() {
       const resolvedCategoryId = await resolveCategoryId(itemForm.categoryName)
 
       let savedItem: ItemRead
+      const isNewItem = itemForm.id === null
       if (itemForm.id !== null) {
         anchorRow(itemForm.id)
       }
@@ -689,7 +691,7 @@ function App() {
         savedItem = await updateItem(itemForm.id, buildItemUpdatePayload(workspace.sale.id, resolvedCategoryId))
       }
 
-      const photoError = await savePickedPhoto(savedItem.id)
+      const photoError = await savePhotosAfterSave(savedItem.id, isNewItem)
       resetItemEditor(false)
       await refreshWorkspaceAndDashboard(workspace.sale.id)
       if (photoError) {
@@ -699,21 +701,37 @@ function App() {
   }
 
   /**
-   * Store (or remove) the item's thumbnail after the item itself is saved.
+   * After the item itself is saved, add the AI pricing photo (if one was picked)
+   * to its photos, then, for a new item, the photos queued in the Photos area.
    * Returns an error message instead of throwing so a photo problem never loses the item.
    */
-  async function savePickedPhoto(itemId: number): Promise<string> {
-    try {
-      if (pricingImageFile) {
-        await uploadItemPhoto(itemId, pricingImageFile)
-      } else if (removeStoredPhoto && storedPhotoUrl !== null) {
-        await deleteItemPhoto(itemId)
+  async function savePhotosAfterSave(itemId: number, isNewItem: boolean): Promise<string> {
+    const files = [...(pricingImageFile ? [pricingImageFile] : []), ...(isNewItem ? queuedPhotos : [])]
+    let failed = 0
+    let reason = ''
+    for (const file of files) {
+      try {
+        await addItemPhoto(itemId, file)
+      } catch (error) {
+        failed += 1
+        reason = error instanceof Error ? error.message : 'Unknown error.'
       }
-      return ''
-    } catch (error) {
-      const reason = error instanceof Error ? error.message : 'Unknown error.'
-      return `The item was saved, but its photo could not be saved: ${reason}`
     }
+    if (failed === 0) {
+      return ''
+    }
+    return failed === 1
+      ? `The item was saved, but a photo could not be saved: ${reason}`
+      : `The item was saved, but ${failed} photos could not be saved: ${reason}`
+  }
+
+  /** Put an updated item (e.g. new photo count) into the list without reloading the sale. */
+  function applyItemChange(item: ItemRead): void {
+    setWorkspace((current) =>
+      current
+        ? { ...current, items: current.items.map((existing) => (existing.id === item.id ? item : existing)) }
+        : current,
+    )
   }
 
   function anchorRow(itemId: number): void {
@@ -757,7 +775,6 @@ function App() {
 
   function beginEditingItem(item: ItemRead, categoryName?: string): void {
     resetPricingState()
-    setStoredPhotoUrl(getItemPhotoUrl(item))
     setShowItemForm(true)
     setItemForm({
       id: item.id,
@@ -921,11 +938,25 @@ function App() {
 
   const itemEditorForm = (
     <form className="stack-form" onSubmit={(event) => void handleItemSubmit(event)}>
-      <div className="photo-field">
-        <span>Item photo (also used for AI pricing)</span>
+      <ItemPhotosPanel
+        key={itemForm.id ?? 'new'}
+        itemId={itemForm.id}
+        itemTitle={itemForm.title}
+        queuedFiles={queuedPhotos}
+        onQueuedFilesChange={setQueuedPhotos}
+        hasPricingPhoto={pricingImageFile !== null}
+        onItemChanged={applyItemChange}
+        onOpenViewer={setPhotoViewer}
+      />
+      <fieldset className="photo-field ai-pricing-field">
+        <legend>AI pricing (optional)</legend>
+        <p className="hint-copy">
+          Take or pick one photo and AI suggests a name, details and price. That photo is also saved with the
+          item, so there is no need to add it again above.
+        </p>
         <div className="photo-actions">
           <label className="secondary-button">
-            Take photo
+            Take photo for pricing
             <input
               type="file"
               accept="image/*"
@@ -935,7 +966,7 @@ function App() {
             />
           </label>
           <label className="secondary-button">
-            Upload photo
+            Upload photo for pricing
             <input
               type="file"
               accept="image/png,image/jpeg,image/webp"
@@ -944,32 +975,13 @@ function App() {
             />
           </label>
         </div>
-      </div>
+      </fieldset>
       {pricingPreviewUrl ? (
         <img
           src={pricingPreviewUrl}
           alt="Item preview for pricing"
           className="pricing-preview"
         />
-      ) : storedPhotoUrl && !removeStoredPhoto ? (
-        <div className="stored-photo">
-          <img
-            src={storedPhotoUrl}
-            alt={`Saved photo of ${itemForm.title}`}
-            className="pricing-preview"
-          />
-          <p className="hint-copy">Take or upload a new photo to replace this one.</p>
-          <button type="button" className="secondary-button" onClick={() => setRemoveStoredPhoto(true)}>
-            Remove photo
-          </button>
-        </div>
-      ) : storedPhotoUrl && removeStoredPhoto ? (
-        <div className="stored-photo">
-          <p className="hint-copy">The saved photo will be removed when you save.</p>
-          <button type="button" className="secondary-button" onClick={() => setRemoveStoredPhoto(false)}>
-            Keep photo
-          </button>
-        </div>
       ) : null}
       {pricingLoading ? <p className="hint-copy">Checking the photo and estimating price...</p> : null}
       {pricingError ? <div className="notice error">{pricingError}</div> : null}
@@ -1710,9 +1722,42 @@ function App() {
           onClick={() => setPhotoViewer(null)}
         >
           <img src={photoViewer.src} alt={photoViewer.alt} />
-          <button type="button" className="secondary-button" autoFocus onClick={() => setPhotoViewer(null)}>
-            Close
-          </button>
+          <div className="photo-overlay-controls">
+            {photoViewer.gallery ? (
+              <button
+                type="button"
+                className="secondary-button"
+                aria-label="Previous photo"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  setPhotoViewer((current) => stepPhotoViewer(current, -1))
+                }}
+              >
+                ‹ Previous
+              </button>
+            ) : null}
+            {photoViewer.gallery ? (
+              <span className="photo-overlay-count" aria-live="polite">
+                {(photoViewer.index ?? 0) + 1} of {photoViewer.gallery.length}
+              </span>
+            ) : null}
+            {photoViewer.gallery ? (
+              <button
+                type="button"
+                className="secondary-button"
+                aria-label="Next photo"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  setPhotoViewer((current) => stepPhotoViewer(current, 1))
+                }}
+              >
+                Next ›
+              </button>
+            ) : null}
+            <button type="button" className="secondary-button" autoFocus onClick={() => setPhotoViewer(null)}>
+              Close
+            </button>
+          </div>
         </div>
       ) : null}
     </div>

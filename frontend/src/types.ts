@@ -55,6 +55,15 @@ export interface ItemRead {
   photo_url: string | null
   /** Cache-busting version of the stored thumbnail; null/absent when none is saved. */
   photo_version?: string | null
+  /** How many photos the item has (main + extra); absent/0 when none. */
+  photo_count?: number
+}
+
+/** One stored photo of an item from GET /items/{id}/photos (id is null for the main photo). */
+export interface ItemPhotoInfo {
+  id: number | null
+  is_main: boolean
+  version: string
 }
 
 /** An item from GET /items: every sale, with its sale and category names. */

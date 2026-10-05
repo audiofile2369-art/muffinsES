@@ -105,3 +105,29 @@ class ItemPhoto(SQLModel, table=True):
         sa_type=DateTime(timezone=True),
         nullable=False,
     )
+
+
+class ItemGalleryPhoto(SQLModel, table=True):
+    """Extra photos for an item, beyond the main one stored in `ItemPhoto`.
+
+    A new table (rather than changing `ItemPhoto`'s key) so `create_all` adds it
+    to existing databases without touching any existing photo rows. The main
+    photo always stays in `ItemPhoto`; "set as main" swaps bytes between the two
+    tables in one transaction.
+    """
+
+    id: int | None = Field(default=None, primary_key=True)
+    item_id: int = Field(index=True, foreign_key="item.id")
+    content_type: str = Field(max_length=40)
+    data: bytes = Field(sa_type=LargeBinary, nullable=False)
+    position: int = Field(default=0)
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_type=DateTime(timezone=True),
+        nullable=False,
+    )
+    updated_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_type=DateTime(timezone=True),
+        nullable=False,
+    )

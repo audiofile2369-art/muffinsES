@@ -9,12 +9,12 @@ from datetime import datetime, timezone
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import update
+from sqlalchemy import func, update
 from sqlmodel import Session, select
 
 from backend.config.database import close_db, database, get_db
 from backend.config.settings import get_logger, get_settings
-from backend.core.models import Category, Item, ItemPhoto, Sale, Task
+from backend.core.models import Category, Item, ItemGalleryPhoto, ItemPhoto, Sale, Task
 from backend.core.pricing import (
     PricingConfigurationError,
     PricingEstimateService,
@@ -28,6 +28,7 @@ from backend.core.schemas import (
     CategoryUpdate,
     DashboardResponse,
     ItemCreate,
+    ItemPhotoRead,
     PricingEstimateResponse,
     ItemQuantityIncrement,
     ItemRead,
@@ -47,6 +48,7 @@ SETTINGS = get_settings()
 
 ALLOWED_PHOTO_TYPES = {"image/jpeg", "image/png", "image/webp"}
 MAX_ITEM_PHOTO_BYTES = 1024 * 1024
+MAX_PHOTOS_PER_ITEM = 12
 
 
 @asynccontextmanager
@@ -148,11 +150,86 @@ def load_photo_versions(session: Session, item_ids: list[int]) -> dict[int, str]
     return {item_id: photo_version_for(updated_at) for item_id, updated_at in rows}
 
 
-def build_item_read(session: Session, item: Item) -> ItemRead:
-    """Serialize one item including its stored photo version."""
+def load_photo_fields(session: Session, item_ids: list[int]) -> dict[int, dict[str, object]]:
+    """Return `photo_version` and `photo_count` per item in two queries total."""
 
-    versions = load_photo_versions(session, [item.id]) if item.id is not None else {}
-    return ItemRead.model_validate(item, update={"photo_version": versions.get(item.id)})
+    if not item_ids:
+        return {}
+    versions = load_photo_versions(session, item_ids)
+    extra_counts = dict(
+        session.exec(
+            select(ItemGalleryPhoto.item_id, func.count(ItemGalleryPhoto.id))
+            .where(ItemGalleryPhoto.item_id.in_(item_ids))
+            .group_by(ItemGalleryPhoto.item_id)
+        ).all()
+    )
+    return {
+        item_id: {
+            "photo_version": versions.get(item_id),
+            "photo_count": (1 if item_id in versions else 0) + int(extra_counts.get(item_id, 0)),
+        }
+        for item_id in item_ids
+    }
+
+
+def build_item_read(session: Session, item: Item) -> ItemRead:
+    """Serialize one item including its stored photo version and count."""
+
+    fields = load_photo_fields(session, [item.id]) if item.id is not None else {}
+    return ItemRead.model_validate(item, update=fields.get(item.id, {}))
+
+
+def read_valid_photo_bytes(photo: UploadFile) -> bytes:
+    """Validate an uploaded item photo and return its bytes (clear errors otherwise)."""
+
+    if photo.content_type not in ALLOWED_PHOTO_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail="Please upload a JPG, PNG, or WEBP image.",
+        )
+    image_bytes = photo.file.read(MAX_ITEM_PHOTO_BYTES + 1)
+    if not image_bytes:
+        raise HTTPException(status_code=400, detail="The uploaded image was empty.")
+    if len(image_bytes) > MAX_ITEM_PHOTO_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail="That photo is too large to save. Please use a photo under 1 MB.",
+        )
+    return image_bytes
+
+
+def load_gallery_photos(session: Session, item_id: int) -> list[ItemGalleryPhoto]:
+    """Return an item's extra photos in display order."""
+
+    return list(
+        session.exec(
+            select(ItemGalleryPhoto)
+            .where(ItemGalleryPhoto.item_id == item_id)
+            .order_by(ItemGalleryPhoto.position, ItemGalleryPhoto.id)
+        ).all()
+    )
+
+
+def promote_first_gallery_photo(session: Session, item_id: int) -> None:
+    """Move the first extra photo into the main slot (the caller commits).
+
+    Runs in the same transaction as removing the main photo, so an item never
+    silently loses a photo if the request is interrupted.
+    """
+
+    gallery = load_gallery_photos(session, item_id)
+    if not gallery:
+        return
+    first = gallery[0]
+    session.add(
+        ItemPhoto(
+            item_id=item_id,
+            content_type=first.content_type,
+            data=first.data,
+            updated_at=datetime.now(timezone.utc),
+        )
+    )
+    session.delete(first)
 
 
 @app.get("/")
@@ -264,8 +341,8 @@ def read_workspace(sale_id: int, session: Session = Depends(get_db)) -> Workspac
     """Return the full workspace payload for a sale."""
 
     sale, categories, items, tasks = load_workspace_records(session, sale_id)
-    photo_versions = load_photo_versions(session, [item.id for item in items if item.id is not None])
-    return build_workspace_response(sale, categories, items, tasks, photo_versions)
+    photo_fields = load_photo_fields(session, [item.id for item in items if item.id is not None])
+    return build_workspace_response(sale, categories, items, tasks, photo_fields)
 
 
 @app.get(f"{SETTINGS.api_prefix}/categories", response_model=list[CategoryRead])
@@ -318,12 +395,12 @@ def read_all_items(session: Session = Depends(get_db)) -> list[ItemWithSale]:
         .outerjoin(Category, Item.category_id == Category.id)
         .order_by(Item.created_at.desc(), Item.id.desc())
     ).all()
-    versions = load_photo_versions(session, [item.id for item, _, _ in rows if item.id is not None])
+    photo_fields = load_photo_fields(session, [item.id for item, _, _ in rows if item.id is not None])
     return [
         ItemWithSale.model_validate(
             item,
             update={
-                "photo_version": versions.get(item.id),
+                **photo_fields.get(item.id, {}),
                 "sale_title": sale_title,
                 "category_name": category_name,
             },
@@ -413,9 +490,9 @@ def bulk_update_items(
     session.commit()
     for item in updated_items:
         session.refresh(item)
-    versions = load_photo_versions(session, [item.id for item in updated_items if item.id is not None])
+    photo_fields = load_photo_fields(session, [item.id for item in updated_items if item.id is not None])
     return [
-        ItemRead.model_validate(item, update={"photo_version": versions.get(item.id)})
+        ItemRead.model_validate(item, update=photo_fields.get(item.id, {}))
         for item in updated_items
     ]
 
@@ -429,20 +506,7 @@ def upload_item_photo(
     """Store (or replace) the small thumbnail photo for an item."""
 
     item = get_item_or_404(session, item_id)
-    if photo.content_type not in ALLOWED_PHOTO_TYPES:
-        raise HTTPException(
-            status_code=400,
-            detail="Please upload a JPG, PNG, or WEBP image.",
-        )
-
-    image_bytes = photo.file.read(MAX_ITEM_PHOTO_BYTES + 1)
-    if not image_bytes:
-        raise HTTPException(status_code=400, detail="The uploaded image was empty.")
-    if len(image_bytes) > MAX_ITEM_PHOTO_BYTES:
-        raise HTTPException(
-            status_code=413,
-            detail="That photo is too large to save. Please use a photo under 1 MB.",
-        )
+    image_bytes = read_valid_photo_bytes(photo)
 
     item_photo = session.get(ItemPhoto, item_id)
     if item_photo is None:
@@ -473,13 +537,134 @@ def read_item_photo(item_id: int, session: Session = Depends(get_db)) -> Respons
 
 @app.delete(f"{SETTINGS.api_prefix}/items/{{item_id}}/photo", response_model=ItemRead)
 def delete_item_photo(item_id: int, session: Session = Depends(get_db)) -> ItemRead:
-    """Remove the stored photo for an item."""
+    """Remove the main photo for an item; its next photo (if any) becomes the main one."""
 
     item = get_item_or_404(session, item_id)
     item_photo = session.get(ItemPhoto, item_id)
     if item_photo is not None:
         session.delete(item_photo)
+        session.flush()
+        promote_first_gallery_photo(session, item_id)
         session.commit()
+    return build_item_read(session, item)
+
+
+@app.get(f"{SETTINGS.api_prefix}/items/{{item_id}}/photos", response_model=list[ItemPhotoRead])
+def list_item_photos(item_id: int, session: Session = Depends(get_db)) -> list[ItemPhotoRead]:
+    """List an item's photos (main first) without any image bytes."""
+
+    get_item_or_404(session, item_id)
+    photos: list[ItemPhotoRead] = []
+    main_rows = session.exec(select(ItemPhoto.updated_at).where(ItemPhoto.item_id == item_id)).all()
+    for updated_at in main_rows:
+        photos.append(ItemPhotoRead(id=None, is_main=True, version=photo_version_for(updated_at)))
+    gallery_rows = session.exec(
+        select(ItemGalleryPhoto.id, ItemGalleryPhoto.updated_at)
+        .where(ItemGalleryPhoto.item_id == item_id)
+        .order_by(ItemGalleryPhoto.position, ItemGalleryPhoto.id)
+    ).all()
+    for photo_id, updated_at in gallery_rows:
+        photos.append(ItemPhotoRead(id=photo_id, is_main=False, version=photo_version_for(updated_at)))
+    return photos
+
+
+@app.post(f"{SETTINGS.api_prefix}/items/{{item_id}}/photos", response_model=ItemRead)
+def add_item_photo(
+    item_id: int,
+    photo: UploadFile = File(...),
+    session: Session = Depends(get_db),
+) -> ItemRead:
+    """Add one more photo to an item; an item's first photo becomes its main photo."""
+
+    item = get_item_or_404(session, item_id)
+    image_bytes = read_valid_photo_bytes(photo)
+    fields = load_photo_fields(session, [item_id])[item_id]
+    if int(fields["photo_count"]) >= MAX_PHOTOS_PER_ITEM:
+        raise HTTPException(
+            status_code=400,
+            detail=f"This item already has {MAX_PHOTOS_PER_ITEM} photos. Remove one to add another.",
+        )
+    if fields["photo_version"] is None:
+        session.add(ItemPhoto(item_id=item_id, content_type=photo.content_type, data=image_bytes))
+    else:
+        last_position = session.exec(
+            select(func.max(ItemGalleryPhoto.position)).where(ItemGalleryPhoto.item_id == item_id)
+        ).one()
+        session.add(
+            ItemGalleryPhoto(
+                item_id=item_id,
+                content_type=photo.content_type,
+                data=image_bytes,
+                position=(last_position or 0) + 1,
+            )
+        )
+    session.commit()
+    return build_item_read(session, item)
+
+
+def get_gallery_photo_or_404(session: Session, item_id: int, photo_id: int) -> ItemGalleryPhoto:
+    """Return one extra photo of an item or raise a 404."""
+
+    gallery_photo = session.get(ItemGalleryPhoto, photo_id)
+    if gallery_photo is None or gallery_photo.item_id != item_id:
+        raise HTTPException(status_code=404, detail="That photo was not found.")
+    return gallery_photo
+
+
+@app.get(f"{SETTINGS.api_prefix}/items/{{item_id}}/photos/{{photo_id}}")
+def read_gallery_photo(item_id: int, photo_id: int, session: Session = Depends(get_db)) -> Response:
+    """Return the bytes of one extra item photo."""
+
+    gallery_photo = get_gallery_photo_or_404(session, item_id, photo_id)
+    # The URL carries a ?v=<version> cache buster, so a long cache is safe.
+    return Response(
+        content=gallery_photo.data,
+        media_type=gallery_photo.content_type,
+        headers={"Cache-Control": "private, max-age=31536000, immutable"},
+    )
+
+
+@app.delete(f"{SETTINGS.api_prefix}/items/{{item_id}}/photos/{{photo_id}}", response_model=ItemRead)
+def delete_gallery_photo(item_id: int, photo_id: int, session: Session = Depends(get_db)) -> ItemRead:
+    """Remove one extra item photo (the main photo is removed via `/photo`)."""
+
+    item = get_item_or_404(session, item_id)
+    session.delete(get_gallery_photo_or_404(session, item_id, photo_id))
+    session.commit()
+    return build_item_read(session, item)
+
+
+@app.post(f"{SETTINGS.api_prefix}/items/{{item_id}}/photos/{{photo_id}}/main", response_model=ItemRead)
+def set_main_item_photo(item_id: int, photo_id: int, session: Session = Depends(get_db)) -> ItemRead:
+    """Make an extra photo the main one by swapping it with the current main photo.
+
+    Both rows change in one transaction, so an interruption leaves either the
+    old or the new arrangement, never a lost or duplicated photo.
+    """
+
+    item = get_item_or_404(session, item_id)
+    gallery_photo = get_gallery_photo_or_404(session, item_id, photo_id)
+    now = datetime.now(timezone.utc)
+    main_photo = session.get(ItemPhoto, item_id)
+    if main_photo is None:
+        session.add(
+            ItemPhoto(
+                item_id=item_id,
+                content_type=gallery_photo.content_type,
+                data=gallery_photo.data,
+                updated_at=now,
+            )
+        )
+        session.delete(gallery_photo)
+    else:
+        old_type, old_data = main_photo.content_type, main_photo.data
+        main_photo.content_type, main_photo.data = gallery_photo.content_type, gallery_photo.data
+        main_photo.updated_at = now
+        gallery_photo.content_type, gallery_photo.data = old_type, old_data
+        gallery_photo.updated_at = now
+        session.add(main_photo)
+        session.add(gallery_photo)
+    session.commit()
     return build_item_read(session, item)
 
 

@@ -4,6 +4,7 @@ import type {
   CategoryRead,
   DashboardResponse,
   ItemPayload,
+  ItemPhotoInfo,
   ItemRead,
   ItemUpdatePayload,
   ItemWithSale,
@@ -349,8 +350,33 @@ export function getItemPhotoUrl(item: ItemRead): string | null {
   return `${API_BASE_URL}/items/${item.id}/photo?v=${encodeURIComponent(item.photo_version)}`
 }
 
-/** Shrink a picked photo to a small thumbnail and store it on the item. */
-export async function uploadItemPhoto(itemId: number, photo: File): Promise<ItemRead> {
+/** Remove the main photo from an item (its next photo, if any, becomes the main one). */
+export function deleteItemPhoto(itemId: number): Promise<ItemRead> {
+  return request<ItemRead>(`/items/${itemId}/photo`, { method: 'DELETE' })
+}
+
+/** Most photos one item can hold (matches the backend). */
+export const MAX_PHOTOS_PER_ITEM = 12
+
+/** URL of one of an item's photos from `listItemPhotos`. */
+export function getItemGalleryPhotoUrl(itemId: number, photo: ItemPhotoInfo): string | null {
+  if (API_BASE_URL === null) {
+    return null
+  }
+  const path = photo.id === null ? `/items/${itemId}/photo` : `/items/${itemId}/photos/${photo.id}`
+  return `${API_BASE_URL}${path}?v=${encodeURIComponent(photo.version)}`
+}
+
+/** List an item's photos, main photo first (no image bytes). */
+export function listItemPhotos(itemId: number): Promise<ItemPhotoInfo[]> {
+  if (useBrowserDemoMode) {
+    return mockApi.listItemPhotos(itemId)
+  }
+  return request<ItemPhotoInfo[]>(`/items/${itemId}/photos`)
+}
+
+/** Shrink a picked photo and add it to the item; an item's first photo becomes its main photo. */
+export async function addItemPhoto(itemId: number, photo: File): Promise<ItemRead> {
   if (useBrowserDemoMode || API_BASE_URL === null) {
     throw new Error('Saving item photos needs the live backend/API to be available.')
   }
@@ -359,8 +385,8 @@ export async function uploadItemPhoto(itemId: number, photo: File): Promise<Item
   const formData = new FormData()
   formData.append('photo', thumbnail)
 
-  const response = await fetch(`${API_BASE_URL}/items/${itemId}/photo`, {
-    method: 'PUT',
+  const response = await fetch(`${API_BASE_URL}/items/${itemId}/photos`, {
+    method: 'POST',
     body: formData,
   })
 
@@ -372,9 +398,17 @@ export async function uploadItemPhoto(itemId: number, photo: File): Promise<Item
   return (await response.json()) as ItemRead
 }
 
-/** Remove the stored thumbnail from an item. */
-export function deleteItemPhoto(itemId: number): Promise<ItemRead> {
-  return request<ItemRead>(`/items/${itemId}/photo`, { method: 'DELETE' })
+/** Remove one of an item's photos (the main photo goes through `deleteItemPhoto`). */
+export function removeItemPhoto(itemId: number, photo: ItemPhotoInfo): Promise<ItemRead> {
+  if (photo.id === null) {
+    return deleteItemPhoto(itemId)
+  }
+  return request<ItemRead>(`/items/${itemId}/photos/${photo.id}`, { method: 'DELETE' })
+}
+
+/** Make one of an item's extra photos its main photo. */
+export function setMainItemPhoto(itemId: number, photoId: number): Promise<ItemRead> {
+  return request<ItemRead>(`/items/${itemId}/photos/${photoId}/main`, { method: 'POST' })
 }
 
 export async function estimatePriceFromPhoto(

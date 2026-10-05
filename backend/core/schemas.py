@@ -152,6 +152,19 @@ class ItemRead(SQLModel):
     notes: str
     photo_url: str | None
     photo_version: str | None = None
+    photo_count: int = 0
+
+
+class ItemPhotoRead(SQLModel):
+    """One stored photo of an item (no image bytes).
+
+    `id` is None for the main photo (served from `/items/{id}/photo`); extra
+    photos are served from `/items/{id}/photos/{photo_id}`.
+    """
+
+    id: int | None
+    is_main: bool
+    version: str
 
 
 class ItemWithSale(ItemRead):
