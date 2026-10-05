@@ -1218,3 +1218,11 @@ details[open] summary {
   background: #f1f5f9;
   color: #475569;
 }
+
+/* ---------- Background refresh failure (data stays on screen) ---------- */
+.refresh-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}

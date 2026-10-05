@@ -246,6 +246,8 @@ function App() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [errorMessage, setErrorMessage] = useState('')
+  // A background refresh of totals failed; the data on screen is kept and a Retry is offered.
+  const [refreshFailed, setRefreshFailed] = useState(false)
   const [showNewSaleForm, setShowNewSaleForm] = useState(false)
   const [showItemForm, setShowItemForm] = useState(false)
   const [saleFilter, setSaleFilter] = useState('')
@@ -276,6 +278,8 @@ function App() {
   // A list row to hold at the same place on screen across the next render(s),
   // so opening, moving or saving the inline editor never makes the list jump.
   const rowAnchorRef = useRef<{ id: string; top: number } | null>(null)
+  // Bumped on every local change; a background refresh that started before a newer change is dropped.
+  const changeSeqRef = useRef(0)
 
   const categoryLookup = useMemo(() => {
     const entries: Array<[number, string]> =
@@ -412,14 +416,60 @@ function App() {
       applyWorkspaceState(nextWorkspace)
       return nextWorkspace
     } catch (error) {
-      applyWorkspaceState(null)
-      setSelectedSaleId(null)
+      // Keep whatever sale is already on screen; only the first load has nothing to show.
+      setSelectedSaleId(shownSaleIdRef.current)
       setErrorMessage(error instanceof Error ? error.message : 'Unable to load the app.')
       return null
     } finally {
       setLoading(false)
     }
   }, [applyWorkspaceState])
+
+  /**
+   * Refresh the dashboard and the open sale's totals in the background after a save:
+   * no loading screen, nothing closed, and a failure never clears what is on screen.
+   */
+  const refreshQuietly = useCallback(async (saleId: number): Promise<void> => {
+    const seq = changeSeqRef.current
+    try {
+      const [nextDashboard, nextWorkspace] = await Promise.all([getDashboard(), getWorkspace(saleId)])
+      if (seq !== changeSeqRef.current) {
+        return // A newer change started its own refresh; this result may be stale.
+      }
+      setRefreshFailed(false)
+      setDashboard(nextDashboard)
+      setWorkspace((current) => (current?.sale.id === saleId ? nextWorkspace : current))
+    } catch {
+      if (seq === changeSeqRef.current) {
+        setRefreshFailed(true)
+      }
+    }
+  }, [])
+
+  /** Note a local change and refresh totals quietly behind it. */
+  const afterLocalChange = useCallback(
+    (saleId: number): void => {
+      changeSeqRef.current += 1
+      void refreshQuietly(saleId)
+    },
+    [refreshQuietly],
+  )
+
+  /** Put a saved item into the open sale's list (new items go first, like the server's order). */
+  const upsertItem = useCallback((item: ItemRead): void => {
+    setWorkspace((current) => {
+      if (!current || current.sale.id !== item.sale_id) {
+        return current
+      }
+      const exists = current.items.some((existing) => existing.id === item.id)
+      return {
+        ...current,
+        items: exists
+          ? current.items.map((existing) => (existing.id === item.id ? item : existing))
+          : [item, ...current.items],
+      }
+    })
+  }, [])
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
@@ -489,6 +539,21 @@ function App() {
     }
   }
 
+  function upsertCategory(category: CategoryRead): void {
+    setWorkspace((current) => {
+      if (!current) {
+        return current
+      }
+      const exists = current.categories.some((existing) => existing.id === category.id)
+      return {
+        ...current,
+        categories: exists
+          ? current.categories.map((existing) => (existing.id === category.id ? category : existing))
+          : [...current.categories, category],
+      }
+    })
+  }
+
   async function resolveCategoryId(categoryName: string): Promise<number | null> {
     if (!workspace) {
       return null
@@ -511,6 +576,7 @@ function App() {
       color: '#8b5cf6',
       sort_order: workspace.categories.length + 1,
     })
+    upsertCategory(createdCategory)
     return createdCategory.id
   }
 
@@ -605,8 +671,10 @@ function App() {
     }
 
     await withSavingState(async () => {
-      await updateSale(workspace.sale.id, buildSalePayload(saleEditor))
-      await refreshWorkspaceAndDashboard(workspace.sale.id)
+      const saleId = workspace.sale.id
+      const savedSale = await updateSale(saleId, buildSalePayload(saleEditor))
+      setWorkspace((current) => (current?.sale.id === saleId ? { ...current, sale: savedSale } : current))
+      afterLocalChange(saleId)
     })
   }
 
@@ -620,14 +688,14 @@ function App() {
         sort_order: Number(categoryForm.sortOrder) || 0,
       }
 
-      if (categoryForm.id === null) {
-        await createCategory(payload)
-      } else {
-        await updateCategory(categoryForm.id, payload)
-      }
+      const savedCategory =
+        categoryForm.id === null ? await createCategory(payload) : await updateCategory(categoryForm.id, payload)
 
       setCategoryForm(createEmptyCategoryForm())
-      await refreshWorkspaceAndDashboard(workspace?.sale.id)
+      upsertCategory(savedCategory)
+      if (workspace) {
+        afterLocalChange(workspace.sale.id)
+      }
     })
   }
 
@@ -657,9 +725,10 @@ function App() {
     const { existing, amount } = duplicatePrompt
     setDuplicatePrompt(null)
     await withSavingState(async () => {
-      await incrementItemQuantity(existing.id, amount)
+      const updated = await incrementItemQuantity(existing.id, amount)
       resetItemEditor(false)
-      await refreshWorkspaceAndDashboard(workspace.sale.id)
+      upsertItem(updated)
+      afterLocalChange(workspace.sale.id)
     })
   }
 
@@ -695,9 +764,10 @@ function App() {
         savedItem = await updateItem(itemForm.id, buildItemUpdatePayload(workspace.sale.id, resolvedCategoryId))
       }
 
+      upsertItem(savedItem)
       const photoError = await savePhotosAfterSave(savedItem.id, isNewItem)
       resetItemEditor(false)
-      await refreshWorkspaceAndDashboard(workspace.sale.id)
+      afterLocalChange(workspace.sale.id)
       if (photoError) {
         setErrorMessage(photoError)
       }
@@ -715,7 +785,7 @@ function App() {
     let reason = ''
     for (const file of files) {
       try {
-        await addItemPhoto(itemId, file)
+        upsertItem(await addItemPhoto(itemId, file))
       } catch (error) {
         failed += 1
         reason = error instanceof Error ? error.message : 'Unknown error.'
@@ -752,9 +822,7 @@ function App() {
       setWorkspace((current) =>
         current ? { ...current, items: current.items.filter((item) => item.id !== itemId) } : current,
       )
-      const [nextDashboard, nextWorkspace] = await Promise.all([getDashboard(), getWorkspace(saleId)])
-      setDashboard(nextDashboard)
-      setWorkspace((current) => (current?.sale.id === saleId ? nextWorkspace : current))
+      afterLocalChange(saleId)
     })
   }
 
@@ -786,14 +854,26 @@ function App() {
     }
 
     await withSavingState(async () => {
-      if (taskForm.id === null) {
-        await createTask(buildTaskPayload(workspace.sale.id))
-      } else {
-        await updateTask(taskForm.id, buildTaskUpdatePayload(workspace.sale.id))
-      }
+      const saleId = workspace.sale.id
+      const savedTask =
+        taskForm.id === null
+          ? await createTask(buildTaskPayload(saleId))
+          : await updateTask(taskForm.id, buildTaskUpdatePayload(saleId))
 
       setTaskForm(createEmptyTaskForm())
-      await refreshWorkspaceAndDashboard(workspace.sale.id)
+      setWorkspace((current) => {
+        if (!current || current.sale.id !== saleId) {
+          return current
+        }
+        const exists = current.tasks.some((task) => task.id === savedTask.id)
+        return {
+          ...current,
+          tasks: exists
+            ? current.tasks.map((task) => (task.id === savedTask.id ? savedTask : task))
+            : [...current.tasks, savedTask],
+        }
+      })
+      afterLocalChange(saleId)
     })
   }
 
@@ -1212,6 +1292,21 @@ function App() {
       </header>
 
       {errorMessage ? <div className="notice error">{errorMessage}</div> : null}
+      {refreshFailed && workspace ? (
+        <div className="notice error refresh-notice" role="status">
+          <span>Your change was saved, but the totals could not be updated. Check the connection.</span>
+          <button
+            type="button"
+            className="secondary-button"
+            onClick={() => {
+              setRefreshFailed(false)
+              void refreshQuietly(workspace.sale.id)
+            }}
+          >
+            Retry
+          </button>
+        </div>
+      ) : null}
 
       {view === 'items' ? (
         <AllItemsView onOpenItem={(item) => void openItemFromAllItems(item)} onOpenPhoto={setPhotoViewer} />
