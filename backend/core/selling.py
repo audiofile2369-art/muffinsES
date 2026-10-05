@@ -111,6 +111,7 @@ def sold_fields(item: Item, events: list[ItemSaleEvent]) -> dict[str, object]:
                 "amount": event.amount,
                 "payment_method": event.payment_method,
                 "sold_at": as_utc(event.sold_at),
+                "order_id": event.order_id,
             }
             for event in events
         ],

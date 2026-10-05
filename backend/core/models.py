@@ -165,3 +165,38 @@ class ItemSaleEvent(SQLModel, table=True):
     payment_method: str | None = Field(default=None, max_length=20)
     status_before: str = Field(default=ItemStatus.AVAILABLE.value, max_length=20)
     sold_at: datetime | None = Field(default=None, sa_type=DateTime(timezone=True), nullable=True)
+    # The customer sale (checkout) this line belongs to; None for sales recorded
+    # before checkouts existed. Added to existing databases by
+    # `ensure_item_sale_event_order_column` (a nullable column, no rewrite) and
+    # deliberately without a database foreign key so older code deleting these
+    # rows can never be blocked by it.
+    order_id: int | None = Field(default=None, index=True)
+
+
+class CustomerOrder(SQLModel, table=True):
+    """One sale to one customer at an estate sale (a checkout of one or more items).
+
+    Its lines are the `ItemSaleEvent` rows with this `order_id`; those rows stay
+    the single source of truth for what sold and the money received (their
+    `amount`s add up exactly to `total`). `lines_json` is a snapshot of the cart
+    as checked out (titles, prices, discounts) so a voided order can still be
+    shown. Voiding deletes the lines (restoring the items, as Undo does) and
+    sets `voided_at`.
+    """
+
+    __tablename__ = "customer_order"
+
+    id: int | None = Field(default=None, primary_key=True)
+    sale_id: int = Field(index=True, foreign_key="sale.id")
+    subtotal: float = Field(default=0.0, ge=0)
+    discount_total: float = Field(default=0.0)
+    total: float = Field(default=0.0, ge=0)
+    payment_method: str = Field(max_length=20)
+    note: str = Field(default="", max_length=500)
+    lines_json: str = Field(default="[]")
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_type=DateTime(timezone=True),
+        nullable=False,
+    )
+    voided_at: datetime | None = Field(default=None, sa_type=DateTime(timezone=True), nullable=True)

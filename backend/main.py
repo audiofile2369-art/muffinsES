@@ -14,8 +14,31 @@ from sqlmodel import Session, select
 
 from backend.config.database import close_db, database, get_db
 from backend.config.settings import get_logger, get_settings
-from backend.core.models import Category, Item, ItemGalleryPhoto, ItemPhoto, ItemSaleEvent, ItemStatus, Sale, Task
-from backend.core.selling import load_sale_events, recorded_units, remaining_units, sold_fields
+from backend.core.models import (
+    Category,
+    CustomerOrder,
+    Item,
+    ItemGalleryPhoto,
+    ItemPhoto,
+    ItemSaleEvent,
+    ItemStatus,
+    Sale,
+    Task,
+)
+from backend.core.checkout import CheckoutError
+from backend.core.orders import (
+    CheckoutConflict,
+    SellLine,
+    build_order_reads,
+    checkout,
+    delete_sale_events,
+    forget_empty_orders,
+    lock_item_row,
+    record_order,
+    restored_status,
+    void_order,
+)
+from backend.core.selling import load_sale_events, sold_fields
 from backend.core.pricing import (
     PricingConfigurationError,
     PricingEstimateService,
@@ -28,6 +51,7 @@ from backend.core.schemas import (
     CategoryCreate,
     CategoryRead,
     CategoryUpdate,
+    CheckoutRequest,
     DashboardResponse,
     ItemCreate,
     ItemPaymentMethodUpdate,
@@ -40,6 +64,7 @@ from backend.core.schemas import (
     ItemStatusUpdate,
     ItemUpdate,
     ItemWithSale,
+    OrderRead,
     PhotoSearchMatch,
     PhotoSearchResponse,
     SaleCreate,
@@ -206,18 +231,7 @@ def clear_sales_if_unsold(session: Session, item: Item, new_status: ItemStatus |
     """Setting a sold item back to any other status means the sale did not happen."""
 
     if new_status is not None and item.status == ItemStatus.SOLD and new_status != ItemStatus.SOLD:
-        session.exec(delete(ItemSaleEvent).where(ItemSaleEvent.item_id == item.id))
-
-
-def lock_item_row(session: Session, item_id: int) -> None:
-    """Take the item row lock for this transaction (a no-op UPDATE).
-
-    Postgres makes a second tablet selling the same item wait here until the
-    first commits, and SQLite serialises writers, so the remaining-quantity
-    check that follows always sees every earlier sale: no overselling.
-    """
-
-    session.exec(update(Item).where(Item.id == item_id).values(quantity=Item.quantity))
+        delete_sale_events(session, ItemSaleEvent.item_id == item.id)
 
 
 def read_valid_photo_bytes(photo: UploadFile) -> bytes:
@@ -387,6 +401,59 @@ def read_workspace(sale_id: int, session: Session = Depends(get_db)) -> Workspac
     photo_fields = load_photo_fields(session, item_ids)
     events = load_sale_events(session, item_ids)
     return build_workspace_response(sale, categories, items, tasks, photo_fields, events)
+
+
+@app.post(f"{SETTINGS.api_prefix}/sales/{{sale_id}}/checkout", response_model=OrderRead)
+def checkout_sale(sale_id: int, payload: CheckoutRequest, session: Session = Depends(get_db)) -> OrderRead:
+    """Sell a cart of items to one customer: every line or nothing.
+
+    The server prices the cart (see backend/core/checkout.py); a line that can
+    no longer be sold as asked returns 409 with `detail.unavailable` naming it.
+    """
+
+    get_sale_or_404(session, sale_id)
+    try:
+        order = checkout(session, sale_id, payload)
+    except CheckoutConflict as conflict:
+        session.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "Some items in this sale are no longer available.",
+                "unavailable": [entry.model_dump() for entry in conflict.unavailable],
+            },
+        ) from None
+    except CheckoutError as error:
+        session.rollback()
+        raise HTTPException(status_code=422, detail=str(error)) from None
+    session.commit()
+    session.refresh(order)
+    return build_order_reads(session, [order])[0]
+
+
+@app.get(f"{SETTINGS.api_prefix}/sales/{{sale_id}}/orders", response_model=list[OrderRead])
+def read_sale_orders(sale_id: int, session: Session = Depends(get_db)) -> list[OrderRead]:
+    """Customer sales at this estate sale (voided ones included), newest first. Two queries."""
+
+    get_sale_or_404(session, sale_id)
+    query = select(CustomerOrder).where(CustomerOrder.sale_id == sale_id)
+    orders = session.exec(
+        query.order_by(CustomerOrder.created_at.desc(), CustomerOrder.id.desc()).limit(500)
+    ).all()
+    return build_order_reads(session, list(orders))
+
+
+@app.post(f"{SETTINGS.api_prefix}/sales/{{sale_id}}/orders/{{order_id}}/void", response_model=OrderRead)
+def void_sale_order(sale_id: int, order_id: int, session: Session = Depends(get_db)) -> OrderRead:
+    """Void a customer sale: its items go back to how they were before it. Idempotent."""
+
+    order = session.get(CustomerOrder, order_id)
+    if order is None or order.sale_id != sale_id:
+        raise HTTPException(status_code=404, detail="Sale not found.")
+    void_order(session, order)
+    session.commit()
+    session.refresh(order)
+    return build_order_reads(session, [order])[0]
 
 
 @app.get(f"{SETTINGS.api_prefix}/categories", response_model=list[CategoryRead])
@@ -584,7 +651,7 @@ def delete_item(item_id: int, session: Session = Depends(get_db)) -> Response:
     item = get_item_or_404(session, item_id)
     session.exec(delete(ItemGalleryPhoto).where(ItemGalleryPhoto.item_id == item_id))
     session.exec(delete(ItemPhoto).where(ItemPhoto.item_id == item_id))
-    session.exec(delete(ItemSaleEvent).where(ItemSaleEvent.item_id == item_id))
+    delete_sale_events(session, ItemSaleEvent.item_id == item_id)
     session.flush()
     session.delete(item)
     session.commit()
@@ -662,36 +729,29 @@ def update_item_status(
 def sell_item(item_id: int, payload: ItemSell, session: Session = Depends(get_db)) -> ItemRead:
     """Record a sale of `quantity` units at `unit_price` each (default: listed price).
 
-    Stored as one ItemSaleEvent whose `amount` is the total received. Selling the
+    Recorded as a one-line customer sale (so it shows in Recent sales): one
+    ItemSaleEvent whose `amount` is the total received. Selling the
     last remaining unit sets the item to sold; fewer keeps its status. Selling
     more than remain is refused (409), checked under the item row lock.
     """
 
-    get_item_or_404(session, item_id)
-    lock_item_row(session, item_id)
     item = get_item_or_404(session, item_id)
-    session.refresh(item)
-    events = load_sale_events(session, [item_id]).get(item_id, [])
-    remaining = remaining_units(item, events)
-    if payload.quantity > remaining:
-        session.rollback()
-        detail = "This item is already sold." if remaining == 0 else f"Only {remaining} left to sell."
-        raise HTTPException(status_code=409, detail=detail)
-    unit_price = payload.unit_price if payload.unit_price is not None else (item.price or 0.0)
-    session.add(
-        ItemSaleEvent(
-            item_id=item_id,
-            quantity=payload.quantity,
-            amount=round(unit_price * payload.quantity, 2),
-            payment_method=payload.payment_method.value,
-            status_before=item.status.value if item.status != ItemStatus.SOLD else ItemStatus.AVAILABLE.value,
-            sold_at=payload.sold_at or datetime.now(timezone.utc),
+    try:
+        record_order(
+            session,
+            item.sale_id,
+            [SellLine(item_id, payload.quantity, payload.unit_price)],
+            payload.payment_method.value,
+            sold_at=payload.sold_at,
+            check_sale=False,
         )
-    )
-    if recorded_units(events) + payload.quantity >= (item.quantity or 1):
-        item.status = ItemStatus.SOLD
-        session.add(item)
+    except CheckoutConflict as conflict:
+        session.rollback()
+        remaining = conflict.unavailable[0].remaining
+        detail = "This item is already sold." if remaining == 0 else f"Only {remaining} left to sell."
+        raise HTTPException(status_code=409, detail=detail) from None
     session.commit()
+    item = get_item_or_404(session, item_id)
     session.refresh(item)
     return build_item_read(session, item)
 
@@ -719,10 +779,9 @@ def unsell_item(item_id: int, payload: ItemUnsell, session: Session = Depends(ge
     for event in removed:
         session.delete(event)
     if item.status == ItemStatus.SOLD:
-        before = removed[0].status_before if removed else ItemStatus.AVAILABLE.value
-        valid = {status.value for status in ItemStatus} - {ItemStatus.SOLD.value}
-        item.status = ItemStatus(before) if before in valid else ItemStatus.AVAILABLE
+        item.status = restored_status(removed[0].status_before if removed else None)
         session.add(item)
+    forget_empty_orders(session, {event.order_id for event in removed if event.order_id is not None})
     session.commit()
     session.refresh(item)
     return build_item_read(session, item)
@@ -758,6 +817,18 @@ def update_item_payment_method(
         raise HTTPException(status_code=409, detail="This item has not been sold.")
     target.payment_method = payload.payment_method.value
     session.add(target)
+    if target.order_id is not None:
+        # One customer sale is paid one way: keep its other lines and the order in step.
+        session.exec(
+            update(ItemSaleEvent)
+            .where(ItemSaleEvent.order_id == target.order_id)
+            .values(payment_method=payload.payment_method.value)
+        )
+        session.exec(
+            update(CustomerOrder)
+            .where(CustomerOrder.id == target.order_id)
+            .values(payment_method=payload.payment_method.value)
+        )
     session.commit()
     session.refresh(item)
     return build_item_read(session, item)

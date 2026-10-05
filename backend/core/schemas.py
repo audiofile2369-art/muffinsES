@@ -175,6 +175,84 @@ class ItemSaleEventRead(SQLModel):
     amount: float
     payment_method: str | None
     sold_at: datetime | None
+    # The customer sale this was part of (None for sales recorded before checkouts).
+    order_id: int | None = None
+
+
+class CheckoutLine(SQLModel):
+    """One cart line: `quantity` units of an item at `unit_price` each, less a $ line discount."""
+
+    item_id: int
+    quantity: int = Field(default=1, ge=1, le=10000)
+    # Price per unit agreed with the customer; defaults to the listed price.
+    unit_price: float | None = Field(default=None, ge=0, le=1_000_000)
+    line_discount: float = Field(default=0.0, ge=0, le=10_000_000)
+
+
+class CheckoutRequest(SQLModel):
+    """Payload for selling a cart of items to one customer, all or nothing.
+
+    At most one sale-wide discount: `discount_amount` ($), `discount_percent`
+    (0-100) or `set_total` (the agreed final total). Totals are worked out by the
+    server; the browser's own total is only for display.
+    """
+
+    lines: list[CheckoutLine] = Field(min_length=1, max_length=500)
+    payment_method: PaymentMethod
+    discount_amount: float | None = Field(default=None, ge=0, le=10_000_000)
+    discount_percent: float | None = Field(default=None, ge=0, le=100)
+    set_total: float | None = Field(default=None, ge=0, le=10_000_000)
+    note: str = Field(default="", max_length=500)
+
+
+class OrderLineRead(SQLModel):
+    """One line of a customer sale, as checked out.
+
+    `amount` is the money received for the line after every discount.
+    `returned` means that line's sale has since been undone (Undo, the item
+    set back to available, the item deleted, or the whole sale voided).
+    """
+
+    item_id: int
+    title: str
+    quantity: int
+    unit_price: float
+    list_price: float | None = None
+    line_discount: float = 0.0
+    amount: float
+    event_id: int | None = None
+    returned: bool = False
+
+
+class OrderRead(SQLModel):
+    """One sale to one customer (a checkout).
+
+    `total` is what was charged at checkout; `received_total` is the money still
+    counted as received (lines not returned; 0 once voided).
+    """
+
+    id: int
+    sale_id: int
+    subtotal: float
+    discount_total: float
+    total: float
+    received_total: float
+    item_count: int
+    payment_method: str
+    note: str
+    created_at: datetime
+    voided_at: datetime | None = None
+    voided: bool = False
+    lines: list[OrderLineRead] = Field(default_factory=list)
+
+
+class CheckoutUnavailable(SQLModel):
+    """A cart line that can no longer be sold as asked (sent with a 409)."""
+
+    item_id: int
+    title: str
+    remaining: int
+    reason: str
 
 
 class ItemRead(SQLModel):
