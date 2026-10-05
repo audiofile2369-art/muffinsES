@@ -23,6 +23,7 @@ import { formatCurrency, itemMatchesSearch, searchTerms, titleCase } from './for
 import { AllItemsView } from './AllItemsView'
 import { ItemPhotosPanel } from './ItemPhotosPanel'
 import { ItemThumbnail } from './ItemThumbnail'
+import { PhotoSearchButton, PhotoSearchPanel } from './PhotoSearch'
 import { QuickNav } from './QuickNav'
 import { buildRouteHash, parseRouteHash } from './routes'
 import type { AppRoute, AppView, SaleSection } from './routes'
@@ -248,6 +249,7 @@ function App() {
   const [showNewSaleForm, setShowNewSaleForm] = useState(false)
   const [showItemForm, setShowItemForm] = useState(false)
   const [saleFilter, setSaleFilter] = useState('')
+  const [photoSearchOpen, setPhotoSearchOpen] = useState(false)
   const [newSaleForm, setNewSaleForm] = useState<SaleFormState>(createEmptySaleForm)
   const [saleEditor, setSaleEditor] = useState<SaleFormState>(createEmptySaleForm)
   const [categoryForm, setCategoryForm] = useState<CategoryFormState>(createEmptyCategoryForm)
@@ -365,6 +367,7 @@ function App() {
     if (nextSaleId !== shownSaleIdRef.current) {
       shownSaleIdRef.current = nextSaleId
       setSaleFilter('')
+      setPhotoSearchOpen(false)
     }
 
     if (nextWorkspace === null) {
@@ -919,7 +922,8 @@ function App() {
     if (element instanceof HTMLDetailsElement) {
       element.open = true
     }
-    element.scrollIntoView({ block: 'start' })
+    // Absolute scroll (not scrollIntoView, which some embedded browsers apply relative to the current offset).
+    window.scrollTo({ top: element.getBoundingClientRect().top + window.scrollY })
   })
 
   const applyRoute = useCallback(
@@ -1349,11 +1353,34 @@ function App() {
                     </button>
                   ) : null}
                 </div>
+                <PhotoSearchButton
+                  active={photoSearchOpen}
+                  onClick={() => {
+                    resetItemEditor(false)
+                    setPhotoSearchOpen((open) => !open)
+                  }}
+                />
                 <button type="button" className="secondary-button" onClick={() => downloadItemsCsv()}>
                   Export CSV
                 </button>
               </div>
 
+              {photoSearchOpen ? (
+                <PhotoSearchPanel
+                  saleId={workspace.sale.id}
+                  scopeLabel="this sale"
+                  onClose={() => setPhotoSearchOpen(false)}
+                  onOpenItem={(item) => {
+                    // Same sale: open the item's editor under its row and scroll there.
+                    setPhotoSearchOpen(false)
+                    setSaleFilter('')
+                    beginEditingItem(item, item.category_name ?? '')
+                    pendingScrollRef.current = `item-row-${item.id}`
+                  }}
+                  onOpenPhoto={setPhotoViewer}
+                />
+              ) : (
+              <>
               {isSearching ? (
                 <p className="hint-copy search-count" aria-live="polite">
                   {filteredItems.length} of {workspace.items.length} items
@@ -1411,6 +1438,8 @@ function App() {
                   <p className="empty-copy">No items yet.</p>
                 )}
               </div>
+              </>
+              )}
               </div>
 
               <div className="section-heading" id="item-editor">

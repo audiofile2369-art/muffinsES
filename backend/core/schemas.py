@@ -247,6 +247,22 @@ class WorkspaceResponse(SQLModel):
     report: ReportMetrics
 
 
+class PhotoSearchMatch(SQLModel):
+    """One saved item found in a search photo."""
+
+    item: ItemWithSale
+    confidence: str
+    reason: str = ""
+
+
+class PhotoSearchResponse(SQLModel):
+    """Result of searching the inventory by photo."""
+
+    summary: str
+    matches: list[PhotoSearchMatch]
+    candidates_considered: int
+
+
 class PricingEstimateResponse(SQLModel):
     """AI pricing estimate returned from an item photo."""
 

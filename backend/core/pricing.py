@@ -141,32 +141,78 @@ class PricingEstimateService:
             f"Follow-up answers: {follow_up_answers or 'None'}",
         ]
 
+        payload = self.create_structured(
+            content=[
+                {
+                    "type": "input_text",
+                    "text": "\n".join(context_lines),
+                },
+                {
+                    "type": "input_image",
+                    "image_url": f"data:{media_type};base64,{image_b64}",
+                },
+            ],
+            schema_name="estate_sale_item_estimate",
+            schema=PRICING_JSON_SCHEMA,
+        )
+
+        follow_up_questions = payload.get("follow_up_questions", [])
+        if not isinstance(follow_up_questions, list):
+            follow_up_questions = []
+
+        return PricingEstimateResponse(
+            suggested_title=str(payload.get("suggested_title") or "").strip(),
+            suggested_description=str(payload.get("suggested_description") or "").strip(),
+            suggested_category=self._match_category(
+                str(payload.get("suggested_category") or "").strip(), sale_categories
+            ),
+            suggested_room=str(payload.get("suggested_room") or "").strip(),
+            suggested_condition=self._match_condition(str(payload.get("suggested_condition") or "").strip()),
+            estimated_price=self._coerce_number(payload.get("estimated_price")),
+            low_estimate=self._coerce_number(payload.get("low_estimate")),
+            high_estimate=self._coerce_number(payload.get("high_estimate")),
+            reasoning=str(payload.get("reasoning") or "").strip(),
+            follow_up_questions=[
+                str(question).strip()
+                for question in follow_up_questions
+                if str(question).strip()
+            ],
+        )
+
+    def create_structured(
+        self,
+        *,
+        content: list[dict[str, object]],
+        schema_name: str,
+        schema: dict[str, object],
+        timeout: float | None = None,
+        max_retries: int | None = None,
+    ) -> dict[str, object]:
+        """Run one OpenAI call that must answer with JSON matching `schema`.
+
+        Shared by pricing and photo search so every AI feature reports bad keys,
+        quota, timeouts and outages with the same clear messages.
+        """
+
+        client = self.client
+        if max_retries is not None and hasattr(client, "with_options"):
+            client = client.with_options(max_retries=max_retries)
+        request_options: dict[str, object] = {}
+        if timeout is not None:
+            request_options["timeout"] = timeout
         try:
-            response = self.client.responses.create(
+            response = client.responses.create(
                 model=self.model,
-                input=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "input_text",
-                                "text": "\n".join(context_lines),
-                            },
-                            {
-                                "type": "input_image",
-                                "image_url": f"data:{media_type};base64,{image_b64}",
-                            },
-                        ],
-                    }
-                ],
+                input=[{"role": "user", "content": content}],
                 text={
                     "format": {
                         "type": "json_schema",
-                        "name": "estate_sale_item_estimate",
-                        "schema": PRICING_JSON_SCHEMA,
+                        "name": schema_name,
+                        "schema": schema,
                         "strict": True,
                     }
                 },
+                **request_options,
             )
         except openai.AuthenticationError as error:
             LOGGER.error("OpenAI rejected the API key: %s", _error_code(error))
@@ -212,31 +258,7 @@ class PricingEstimateService:
                 status_code=502,
             ) from error
 
-        raw_text = response.output_text.strip()
-        payload = self._extract_json_payload(raw_text)
-
-        follow_up_questions = payload.get("follow_up_questions", [])
-        if not isinstance(follow_up_questions, list):
-            follow_up_questions = []
-
-        return PricingEstimateResponse(
-            suggested_title=str(payload.get("suggested_title") or "").strip(),
-            suggested_description=str(payload.get("suggested_description") or "").strip(),
-            suggested_category=self._match_category(
-                str(payload.get("suggested_category") or "").strip(), sale_categories
-            ),
-            suggested_room=str(payload.get("suggested_room") or "").strip(),
-            suggested_condition=self._match_condition(str(payload.get("suggested_condition") or "").strip()),
-            estimated_price=self._coerce_number(payload.get("estimated_price")),
-            low_estimate=self._coerce_number(payload.get("low_estimate")),
-            high_estimate=self._coerce_number(payload.get("high_estimate")),
-            reasoning=str(payload.get("reasoning") or "").strip(),
-            follow_up_questions=[
-                str(question).strip()
-                for question in follow_up_questions
-                if str(question).strip()
-            ],
-        )
+        return self._extract_json_payload(response.output_text.strip())
 
     @staticmethod
     def _match_category(suggested: str, sale_categories: list[str]) -> str:

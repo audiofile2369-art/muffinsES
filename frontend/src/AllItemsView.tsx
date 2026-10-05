@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { getAllItems } from './api'
 import { formatCurrency, itemMatchesSearch, searchTerms, titleCase } from './format'
 import { ItemThumbnail } from './ItemThumbnail'
+import { PhotoSearchButton, PhotoSearchPanel } from './PhotoSearch'
 import type { PhotoViewerState } from './ItemThumbnail'
 import type { ItemStatus, ItemWithSale } from './types'
 
@@ -46,6 +47,7 @@ export function AllItemsView({ onOpenItem, onOpenPhoto }: AllItemsViewProps) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [query, setQuery] = useState('')
+  const [photoSearchOpen, setPhotoSearchOpen] = useState(false)
   const [saleFilter, setSaleFilter] = useState<number | 'all'>('all')
   const [statusFilter, setStatusFilter] = useState<ItemStatus | 'all'>('all')
   const [sortOrder, setSortOrder] = useState<SortOrder>('newest')
@@ -167,6 +169,7 @@ export function AllItemsView({ onOpenItem, onOpenPhoto }: AllItemsViewProps) {
             />
           </label>
         </div>
+        <PhotoSearchButton active={photoSearchOpen} onClick={() => setPhotoSearchOpen((open) => !open)} />
         <label className="sort-field">
           Sort
           <select value={sortOrder} onChange={(event) => setSortOrder(event.target.value as SortOrder)}>
@@ -178,6 +181,16 @@ export function AllItemsView({ onOpenItem, onOpenPhoto }: AllItemsViewProps) {
         </label>
       </div>
 
+      {photoSearchOpen ? (
+        <PhotoSearchPanel
+          saleId={null}
+          scopeLabel="every sale"
+          onClose={() => setPhotoSearchOpen(false)}
+          onOpenItem={onOpenItem}
+          onOpenPhoto={onOpenPhoto}
+        />
+      ) : (
+      <>
       <div className="all-items-filters">
         {saleChips.length > 1 ? (
           <div className="chip-row" role="group" aria-label="Filter by sale">
@@ -287,6 +300,8 @@ export function AllItemsView({ onOpenItem, onOpenPhoto }: AllItemsViewProps) {
             </div>
           ))}
         </div>
+      )}
+      </>
       )}
     </section>
   )

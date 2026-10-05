@@ -8,6 +8,7 @@ import type {
   ItemRead,
   ItemUpdatePayload,
   ItemWithSale,
+  PhotoSearchResponse,
   PricingEstimateResponse,
   SalePayload,
   SaleRead,
@@ -314,6 +315,7 @@ export async function importLegacyBrowserDataToBackend(): Promise<boolean> {
 const MAX_PHOTO_DIMENSION = 1600
 const MAX_UNSCALED_PHOTO_BYTES = 1_500_000
 const ITEM_PHOTO_DIMENSION = 640
+const SEARCH_PHOTO_DIMENSION = 1024
 
 /**
  * Re-encode a photo as a JPEG whose longest side is at most `maxDimension`.
@@ -463,4 +465,32 @@ export async function estimatePriceFromPhoto(
   }
 
   return (await response.json()) as PricingEstimateResponse
+}
+
+/**
+ * Find saved items that look like the photo: in one sale, or in every sale when
+ * `saleId` is null. The photo is downscaled first to keep the upload small.
+ */
+export async function searchItemsByPhoto(photo: File, saleId: number | null): Promise<PhotoSearchResponse> {
+  if (useBrowserDemoMode || API_BASE_URL === null) {
+    throw new Error('Search by photo needs the live backend/API to be available.')
+  }
+
+  const formData = new FormData()
+  formData.append('photo', (await resizePhoto(photo, SEARCH_PHOTO_DIMENSION, 0.85)) ?? (await shrinkPhotoForUpload(photo)))
+  if (saleId !== null) {
+    formData.append('sale_id', String(saleId))
+  }
+
+  const response = await fetch(`${API_BASE_URL}/items/search-by-photo`, {
+    method: 'POST',
+    body: formData,
+  })
+
+  if (!response.ok) {
+    const message = await response.text()
+    throw new Error(extractErrorMessage(message, response.status))
+  }
+
+  return (await response.json()) as PhotoSearchResponse
 }

@@ -175,3 +175,17 @@ export interface PricingEstimateResponse {
   reasoning: string
   follow_up_questions: string[]
 }
+
+/** One saved item found by POST /items/search-by-photo. */
+export interface PhotoSearchMatch {
+  item: ItemWithSale
+  confidence: 'high' | 'medium' | 'low'
+  reason: string
+}
+
+export interface PhotoSearchResponse {
+  /** What the AI saw in the search photo. */
+  summary: string
+  matches: PhotoSearchMatch[]
+  candidates_considered: number
+}

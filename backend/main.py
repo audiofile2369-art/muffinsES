@@ -20,6 +20,7 @@ from backend.core.pricing import (
     PricingEstimateService,
     PricingServiceError,
 )
+from backend.core.photo_search import PhotoItemMatcher, SearchableItem
 from backend.core.reporting import build_sale_summary, build_workspace_response
 from backend.core.schemas import (
     BulkItemUpdate,
@@ -34,6 +35,8 @@ from backend.core.schemas import (
     ItemRead,
     ItemUpdate,
     ItemWithSale,
+    PhotoSearchMatch,
+    PhotoSearchResponse,
     SaleCreate,
     SaleRead,
     SaleUpdate,
@@ -49,6 +52,8 @@ SETTINGS = get_settings()
 ALLOWED_PHOTO_TYPES = {"image/jpeg", "image/png", "image/webp"}
 MAX_ITEM_PHOTO_BYTES = 1024 * 1024
 MAX_PHOTOS_PER_ITEM = 12
+# Search photos are downscaled in the browser; this keeps far below Vercel's 4.5 MB body limit.
+MAX_SEARCH_PHOTO_BYTES = 3 * 1024 * 1024
 
 
 @asynccontextmanager
@@ -387,14 +392,23 @@ def update_category(
 
 @app.get(f"{SETTINGS.api_prefix}/items", response_model=list[ItemWithSale])
 def read_all_items(session: Session = Depends(get_db)) -> list[ItemWithSale]:
-    """Return every item across all sales, newest first, in two queries (no photo bytes)."""
+    """Return every item across all sales, newest first, in three queries (no photo bytes)."""
 
-    rows = session.exec(
+    return load_items_with_sale(session)
+
+
+def load_items_with_sale(session: Session, sale_id: int | None = None) -> list[ItemWithSale]:
+    """Items (optionally of one sale) with sale/category names and photo fields, newest first."""
+
+    statement = (
         select(Item, Sale.title, Category.name)
         .join(Sale, Item.sale_id == Sale.id)
         .outerjoin(Category, Item.category_id == Category.id)
         .order_by(Item.created_at.desc(), Item.id.desc())
-    ).all()
+    )
+    if sale_id is not None:
+        statement = statement.where(Item.sale_id == sale_id)
+    rows = session.exec(statement).all()
     photo_fields = load_photo_fields(session, [item.id for item, _, _ in rows if item.id is not None])
     return [
         ItemWithSale.model_validate(
@@ -407,6 +421,80 @@ def read_all_items(session: Session = Depends(get_db)) -> list[ItemWithSale]:
         )
         for item, sale_title, category_name in rows
     ]
+
+
+@app.post(f"{SETTINGS.api_prefix}/items/search-by-photo", response_model=PhotoSearchResponse)
+def search_items_by_photo(
+    photo: UploadFile = File(...),
+    sale_id: int | None = Form(default=None),
+    session: Session = Depends(get_db),
+) -> PhotoSearchResponse:
+    """Find saved items that match a photo (one sale, or every sale when `sale_id` is empty).
+
+    Two OpenAI calls at most (describe, then compare with up to 8 candidate
+    photos); see `backend/core/photo_search.py`.
+    """
+
+    if photo.content_type not in ALLOWED_PHOTO_TYPES:
+        raise HTTPException(status_code=400, detail="Please upload a JPG, PNG, or WEBP image.")
+    image_bytes = photo.file.read(MAX_SEARCH_PHOTO_BYTES + 1)
+    if not image_bytes:
+        raise HTTPException(status_code=400, detail="The uploaded image was empty.")
+    if len(image_bytes) > MAX_SEARCH_PHOTO_BYTES:
+        raise HTTPException(status_code=413, detail="That photo is too large. Please use a smaller photo.")
+    if sale_id is not None:
+        get_sale_or_404(session, sale_id)
+
+    items = load_items_with_sale(session, sale_id)
+    if not items:
+        return PhotoSearchResponse(summary="", matches=[], candidates_considered=0)
+    searchable = [
+        SearchableItem(
+            id=item.id,
+            title=item.title,
+            description=item.description,
+            category=item.category_name or "",
+            room=item.room,
+            condition=item.condition,
+            notes=item.notes,
+            has_photo=item.photo_version is not None,
+        )
+        for item in items
+    ]
+
+    def load_photos(item_ids: list[int]) -> dict[int, tuple[bytes, str]]:
+        if not item_ids:
+            return {}
+        rows = session.exec(
+            select(ItemPhoto.item_id, ItemPhoto.data, ItemPhoto.content_type).where(ItemPhoto.item_id.in_(item_ids))
+        ).all()
+        return {item_id: (data, content_type) for item_id, data, content_type in rows}
+
+    try:
+        matcher = PhotoItemMatcher(PricingEstimateService.from_settings())
+        result = matcher.match(
+            image_bytes=image_bytes,
+            media_type=photo.content_type,
+            items=searchable,
+            load_photos=load_photos,
+        )
+    except PricingConfigurationError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    except PricingServiceError as error:
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
+
+    by_id = {item.id: item for item in items}
+    return PhotoSearchResponse(
+        summary=result.description.summary or result.description.object_type,
+        matches=[
+            PhotoSearchMatch(item=by_id[match.item_id], confidence=match.confidence, reason=match.reason)
+            for match in result.matches
+            if match.item_id in by_id
+        ],
+        candidates_considered=result.candidate_count,
+    )
 
 
 @app.post(f"{SETTINGS.api_prefix}/items", response_model=ItemRead)
