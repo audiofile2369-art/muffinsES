@@ -255,6 +255,11 @@ function buildRevertPayload(before: ItemRead, after: ItemRead): ItemPartialUpdat
   return changed ? (payload as ItemPartialUpdatePayload) : null
 }
 
+/** True when two flat forms hold the same values. */
+function sameFormValues<T extends object>(left: T, right: T): boolean {
+  return (Object.keys(left) as Array<keyof T>).every((key) => left[key] === right[key])
+}
+
 /** Item names compared for duplicates: trimmed, case-insensitive, single spaces. */
 function normalizeItemName(value: string): string {
   return value.trim().replace(/\s+/g, ' ').toLowerCase()
@@ -292,7 +297,16 @@ function App() {
   const [saleEditor, setSaleEditor] = useState<SaleFormState>(createEmptySaleForm)
   const [categoryForm, setCategoryForm] = useState<CategoryFormState>(createEmptyCategoryForm)
   const [itemForm, setItemForm] = useState<ItemFormState>(createEmptyItemForm)
+  // What the item / task form held when it was opened; anything different is an unsaved edit.
+  const [itemBaseline, setItemBaseline] = useState<ItemFormState>(createEmptyItemForm)
   const [taskForm, setTaskForm] = useState<TaskFormState>(createEmptyTaskForm)
+  const [taskBaseline, setTaskBaseline] = useState<TaskFormState>(createEmptyTaskForm)
+  const [discardPrompt, setDiscardPrompt] = useState<{ name: string; resolve: (discard: boolean) => void } | null>(
+    null,
+  )
+  // The address-bar hash last shown, to go back to when Back is pressed but edits are kept.
+  const lastHashRef = useRef(window.location.hash)
+  const leaveGuardRef = useRef<(route: AppRoute) => Promise<boolean>>(async () => true)
   const [pricingImageFile, setPricingImageFile] = useState<File | null>(null)
   const [pricingPreviewUrl, setPricingPreviewUrl] = useState('')
   const [pricingEstimate, setPricingEstimate] = useState<PricingEstimateResponse | null>(null)
@@ -393,6 +407,7 @@ function App() {
   const resetItemEditor = useCallback(
     (shouldShowForm = false): void => {
       setItemForm(createEmptyItemForm())
+      setItemBaseline(createEmptyItemForm())
       resetPricingState()
       setShowItemForm(shouldShowForm)
     },
@@ -403,6 +418,7 @@ function App() {
     setWorkspace(nextWorkspace)
     resetItemEditor(false)
     setTaskForm(createEmptyTaskForm())
+    setTaskBaseline(createEmptyTaskForm())
     setCategoryForm(createEmptyCategoryForm())
     // Keep the search while working in one sale; start fresh when the sale changes.
     const nextSaleId = nextWorkspace?.sale.id ?? null
@@ -694,6 +710,9 @@ function App() {
   }
 
   async function handleSaleSelection(saleId: number): Promise<void> {
+    if (saleId !== selectedSaleId && !(await confirmDiscard('all'))) {
+      return
+    }
     await refreshWorkspaceAndDashboard(saleId)
   }
 
@@ -957,6 +976,7 @@ function App() {
     setStatus(previous, status)
     // Keep an open editor for this item in step, so its next save does not undo the change.
     setItemForm((current) => (current.id === item.id ? { ...current, status } : current))
+    setItemBaseline((current) => (current.id === item.id ? { ...current, status } : current))
     try {
       const saved = await updateItemStatus(item.id, status)
       upsertItem(saved)
@@ -1006,6 +1026,7 @@ function App() {
           : await updateTask(taskForm.id, buildTaskUpdatePayload(saleId))
 
       setTaskForm(createEmptyTaskForm())
+      setTaskBaseline(createEmptyTaskForm())
       setWorkspace((current) => {
         if (!current || current.sale.id !== saleId) {
           return current
@@ -1034,7 +1055,7 @@ function App() {
   function beginEditingItem(item: ItemRead, categoryName?: string): void {
     resetPricingState()
     setShowItemForm(true)
-    setItemForm({
+    const form: ItemFormState = {
       id: item.id,
       title: item.title,
       description: item.description,
@@ -1046,10 +1067,100 @@ function App() {
       status: item.status,
       notes: item.notes,
       photoUrl: item.photo_url ?? '',
-    })
+    }
+    setItemForm(form)
+    setItemBaseline(form)
   }
 
-  function toggleItemForm(): void {
+  // ---------- Unsaved-changes guard ----------
+  // Photos added in the Photos section of an existing item are saved at once and never count.
+  const itemDirty =
+    showItemForm &&
+    (!sameFormValues(itemForm, itemBaseline) || pricingImageFile !== null || queuedPhotos.length > 0)
+  const taskDirty = !sameFormValues(taskForm, taskBaseline)
+  const saleDirty =
+    workspace !== null &&
+    !sameFormValues(saleEditor, {
+      title: workspace.sale.title,
+      address: workspace.sale.address,
+      startDate: workspace.sale.start_date,
+      endDate: workspace.sale.end_date,
+      status: workspace.sale.status,
+      notes: workspace.sale.notes,
+    })
+  const anyDirty = itemDirty || taskDirty || saleDirty
+
+  /** Name of the first form with unsaved edits in `scope`, or null when nothing would be lost. */
+  function dirtyName(scope: 'item' | 'task' | 'all'): string | null {
+    if (itemDirty && (scope === 'item' || scope === 'all')) {
+      return itemForm.title.trim() || (itemForm.id === null ? 'the new item' : 'this item')
+    }
+    if (taskDirty && (scope === 'task' || scope === 'all')) {
+      return taskForm.title.trim() || 'the new task'
+    }
+    if (saleDirty && scope === 'all') {
+      return `${saleEditor.title.trim() || 'this sale'} details`
+    }
+    return null
+  }
+
+  /** Ask before edits would be lost; resolves true when it is fine to go on (edits discarded). */
+  async function confirmDiscard(scope: 'item' | 'task' | 'all'): Promise<boolean> {
+    const name = dirtyName(scope)
+    if (name === null) {
+      return true
+    }
+    const discard = await new Promise<boolean>((resolve) => setDiscardPrompt({ name, resolve }))
+    setDiscardPrompt(null)
+    if (!discard) {
+      return false
+    }
+    if (scope === 'item' || scope === 'all') {
+      resetItemEditor(false)
+    }
+    if (scope === 'task' || scope === 'all') {
+      setTaskForm(createEmptyTaskForm())
+      setTaskBaseline(createEmptyTaskForm())
+    }
+    if (scope === 'all' && workspace) {
+      setSaleEditor({
+        title: workspace.sale.title,
+        address: workspace.sale.address,
+        startDate: workspace.sale.start_date,
+        endDate: workspace.sale.end_date,
+        status: workspace.sale.status,
+        notes: workspace.sale.notes,
+      })
+    }
+    return true
+  }
+
+  function routeLeavesScreen(route: AppRoute): boolean {
+    return route.view !== view || (route.view === 'sales' && route.saleId != null && route.saleId !== selectedSaleId)
+  }
+
+  useEffect(() => {
+    leaveGuardRef.current = (route) =>
+      routeLeavesScreen(route) ? confirmDiscard('all') : Promise.resolve(true)
+  })
+
+  // Closing or reloading the tab with unsaved edits asks the browser's own "Leave site?".
+  useEffect(() => {
+    if (!anyDirty) {
+      return
+    }
+    function handleBeforeUnload(event: BeforeUnloadEvent): void {
+      event.preventDefault()
+      event.returnValue = ''
+    }
+    window.addEventListener('beforeunload', handleBeforeUnload)
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload)
+  }, [anyDirty])
+
+  async function toggleItemForm(): Promise<void> {
+    if (!(await confirmDiscard('item'))) {
+      return
+    }
     if (showItemForm && itemForm.id === null) {
       resetItemEditor(false)
       return
@@ -1058,14 +1169,19 @@ function App() {
     resetItemEditor(true)
   }
 
-  function beginEditingTask(task: TaskRead): void {
-    setTaskForm({
+  async function beginEditingTask(task: TaskRead): Promise<void> {
+    if (!(await confirmDiscard('task'))) {
+      return
+    }
+    const form: TaskFormState = {
       id: task.id,
       title: task.title,
       dueDate: task.due_date ?? '',
       status: task.status,
       notes: task.notes,
-    })
+    }
+    setTaskForm(form)
+    setTaskBaseline(form)
   }
 
   function downloadItemsCsv(): void {
@@ -1109,6 +1225,7 @@ function App() {
     if (window.location.hash !== nextHash) {
       window.history.replaceState(null, '', nextHash)
     }
+    lastHashRef.current = nextHash
   }, [activeSection, loading, selectedSaleId, view])
 
   // Keep an anchored list row where it was on screen (before paint, so nothing jumps).
@@ -1167,23 +1284,38 @@ function App() {
   useEffect(() => {
     function handlePopState(): void {
       const route = parseRouteHash(window.location.hash)
-      void flushToast().then(() => applyRoute(route))
+      void leaveGuardRef.current(route).then((ok) => {
+        if (!ok) {
+          // Keep editing: put the address bar back where the screen still is.
+          window.history.pushState(null, '', lastHashRef.current)
+          return
+        }
+        lastHashRef.current = window.location.hash
+        void flushToast().then(() => applyRoute(route))
+      })
     }
     window.addEventListener('popstate', handlePopState)
     return () => window.removeEventListener('popstate', handlePopState)
   }, [applyRoute])
 
   async function navigate(route: AppRoute): Promise<WorkspaceResponse | null> {
+    if (!(await leaveGuardRef.current(route))) {
+      return null
+    }
     const nextHash = buildRouteHash(route)
     if (window.location.hash !== nextHash) {
       window.history.pushState(null, '', nextHash)
     }
+    lastHashRef.current = nextHash
     // A delete waiting on its Undo toast is sent before another view loads its own copy.
     await flushToast()
     return applyRoute(route)
   }
 
-  function startAddingItem(): void {
+  async function startAddingItem(): Promise<void> {
+    if (!(await confirmDiscard('item'))) {
+      return
+    }
     void navigate({ view: 'sales', saleId: selectedSaleId, section: 'items' })
     resetItemEditor(true)
     pendingScrollRef.current = 'item-editor'
@@ -1191,6 +1323,9 @@ function App() {
 
   async function openItemFromAllItems(item: ItemWithSale): Promise<void> {
     const loadedWorkspace = await navigate({ view: 'sales', saleId: item.sale_id, section: 'items' })
+    if (loadedWorkspace === null) {
+      return
+    }
     const freshItem = loadedWorkspace?.items.find((candidate) => candidate.id === item.id) ?? item
     setSaleFilter('')
     beginEditingItem(freshItem, item.category_name ?? '')
@@ -1433,7 +1568,7 @@ function App() {
         saleId={workspace?.sale.id ?? null}
         saleTitle={workspace?.sale.title ?? null}
         onNavigate={(route) => void navigate(route)}
-        onAddItem={() => startAddingItem()}
+        onAddItem={() => void startAddingItem()}
       />
     <main className="app-shell">
       <header className="app-header">
@@ -1609,8 +1744,12 @@ function App() {
                 <PhotoSearchButton
                   active={photoSearchOpen}
                   onClick={() => {
-                    resetItemEditor(false)
-                    setPhotoSearchOpen((open) => !open)
+                    void confirmDiscard('item').then((ok) => {
+                      if (ok) {
+                        resetItemEditor(false)
+                        setPhotoSearchOpen((open) => !open)
+                      }
+                    })
                   }}
                 />
                 <button type="button" className="secondary-button" onClick={() => downloadItemsCsv()}>
@@ -1623,7 +1762,10 @@ function App() {
                   saleId={workspace.sale.id}
                   scopeLabel="this sale"
                   onClose={() => setPhotoSearchOpen(false)}
-                  onOpenItem={(item) => {
+                  onOpenItem={async (item) => {
+                    if (!(await confirmDiscard('item'))) {
+                      return
+                    }
                     // Same sale: open the item's editor under its row and scroll there.
                     setPhotoSearchOpen(false)
                     setSaleFilter('')
@@ -1653,7 +1795,10 @@ function App() {
                         type="button"
                         className="item-row-main"
                         aria-expanded={itemForm.id === item.id}
-                        onClick={() => {
+                        onClick={async () => {
+                          if (!(await confirmDiscard('item'))) {
+                            return
+                          }
                           anchorRow(item.id)
                           if (itemForm.id === item.id) {
                             resetItemEditor(false)
@@ -1704,7 +1849,7 @@ function App() {
                   <h3>Add item</h3>
                   <p>Tap an item above to edit it right there.</p>
                 </div>
-                <button type="button" className="secondary-button" onClick={() => toggleItemForm()}>
+                <button type="button" className="secondary-button" onClick={() => void toggleItemForm()}>
                   {showItemForm && itemForm.id === null ? 'Close' : 'Add item'}
                 </button>
               </div>
@@ -1723,7 +1868,7 @@ function App() {
                       type="button"
                       key={task.id}
                       className="list-card"
-                      onClick={() => beginEditingTask(task)}
+                      onClick={() => void beginEditingTask(task)}
                     >
                       <div>
                         <strong>{task.title}</strong>
@@ -1747,7 +1892,14 @@ function App() {
                     <button
                       type="button"
                       className="secondary-button"
-                      onClick={() => setTaskForm(createEmptyTaskForm())}
+                      onClick={() => {
+                        void confirmDiscard('task').then((ok) => {
+                          if (ok) {
+                            setTaskForm(createEmptyTaskForm())
+                            setTaskBaseline(createEmptyTaskForm())
+                          }
+                        })
+                      }}
                     >
                       New task
                     </button>
@@ -2036,6 +2188,33 @@ function App() {
               onClick={() => void handleDuplicateAddSeparately()}
             >
               Add as a separate item
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {discardPrompt ? (
+        <div className="modal-backdrop" onClick={() => discardPrompt.resolve(false)}>
+          <div
+            className="modal-card"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="discard-title"
+            onClick={(event) => event.stopPropagation()}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') {
+                event.stopPropagation()
+                discardPrompt.resolve(false)
+              }
+            }}
+          >
+            <h3 id="discard-title">Discard changes to &ldquo;{discardPrompt.name}&rdquo;?</h3>
+            <p>Your changes have not been saved.</p>
+            <button type="button" className="primary-button" autoFocus onClick={() => discardPrompt.resolve(false)}>
+              Keep editing
+            </button>
+            <button type="button" className="secondary-button danger-button" onClick={() => discardPrompt.resolve(true)}>
+              Discard
             </button>
           </div>
         </div>
