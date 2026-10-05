@@ -197,7 +197,7 @@ export function AllItemsView({ onOpenItem, onOpenPhoto, onItemChanged }: AllItem
                 : isFiltered
                   ? `${visibleItems.length} of ${items.length} items`
                   : `${items.length} ${items.length === 1 ? 'item' : 'items'} in ${saleChips.length} ${
-                      saleChips.length === 1 ? 'sale' : 'sales'
+                      saleChips.length === 1 ? 'estate sale' : 'estate sales'
                     }`}
             </p>
           </div>
@@ -228,7 +228,7 @@ export function AllItemsView({ onOpenItem, onOpenPhoto, onItemChanged }: AllItem
             Search all items
             <input
               type="search"
-              placeholder="Name, room, sale, price..."
+              placeholder="Name, room, estate sale, price..."
               autoComplete="off"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
@@ -250,7 +250,7 @@ export function AllItemsView({ onOpenItem, onOpenPhoto, onItemChanged }: AllItem
       {photoSearchOpen ? (
         <PhotoSearchPanel
           saleId={null}
-          scopeLabel="every sale"
+          scopeLabel="every estate sale"
           onClose={() => setPhotoSearchOpen(false)}
           onOpenItem={onOpenItem}
           onOpenPhoto={onOpenPhoto}
@@ -259,14 +259,14 @@ export function AllItemsView({ onOpenItem, onOpenPhoto, onItemChanged }: AllItem
       <>
       <div className="all-items-filters">
         {saleChips.length > 1 ? (
-          <div className="chip-row" role="group" aria-label="Filter by sale">
+          <div className="chip-row" role="group" aria-label="Filter by estate sale">
             <button
               type="button"
               className={`chip ${saleFilter === 'all' ? 'active' : ''}`}
               aria-pressed={saleFilter === 'all'}
               onClick={() => setSaleFilter('all')}
             >
-              All sales
+              All estate sales
             </button>
             {saleChips.map((sale) => (
               <button

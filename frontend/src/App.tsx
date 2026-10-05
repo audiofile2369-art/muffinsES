@@ -28,7 +28,8 @@ import { ItemPhotosPanel } from './ItemPhotosPanel'
 import { ItemThumbnail } from './ItemThumbnail'
 import { PhotoSearchButton, PhotoSearchPanel } from './PhotoSearch'
 import { QuickNav } from './QuickNav'
-import { SaleDayView } from './SaleDayView'
+import { SalePage } from './SalePage'
+import { addItemToStoredCart } from './cart'
 import { StatusMenu } from './StatusMenu'
 import { SellControls } from './SellControls'
 import { PAYMENT_METHODS, paymentLabel, remainingUnits, restoreSales, soldUnits } from './selling'
@@ -554,6 +555,11 @@ function App() {
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
       const initialRoute = parseRouteHash(window.location.hash)
+      if (window.location.hash.includes('/sale-day')) {
+        const canonical = buildRouteHash(initialRoute)
+        window.history.replaceState(null, '', canonical)
+        lastHashRef.current = canonical
+      }
       pendingScrollRef.current = initialRoute.section ? `section-${initialRoute.section}` : null
       void refreshWorkspaceAndDashboard(initialRoute.saleId)
     }, 0)
@@ -949,7 +955,7 @@ function App() {
     const itemId = itemForm.id
     const saleId = workspace.sale.id
     const name = itemForm.title.trim() || 'this item'
-    if (!window.confirm(`Delete "${name}"? This removes it and its photos from this sale.`)) {
+    if (!window.confirm(`Delete "${name}"? This removes it and its photos from this estate sale.`)) {
       return
     }
 
@@ -1158,7 +1164,7 @@ function App() {
       return taskForm.title.trim() || 'the new task'
     }
     if (saleDirty && scope === 'all') {
-      return `${saleEditor.title.trim() || 'this sale'} details`
+      return `${saleEditor.title.trim() || 'this estate sale'} details`
     }
     return null
   }
@@ -1263,6 +1269,7 @@ function App() {
         'Sold price (total received)',
         'Sold at',
         'Payment method',
+        'Customer sale #',
       ],
       ...filteredItems.map((item) => [
         item.title,
@@ -1278,6 +1285,7 @@ function App() {
         item.sold_total === null || item.sold_total === undefined ? '' : String(item.sold_total),
         item.sold_at ?? '',
         soldUnits(item) > 0 ? paymentLabel(item.payment_method) : '',
+        [...new Set((item.sale_events ?? []).map((event) => event.order_id).filter((id) => id != null))].join(' '),
       ]),
     ]
 
@@ -1361,6 +1369,9 @@ function App() {
   useEffect(() => {
     function handlePopState(): void {
       const route = parseRouteHash(window.location.hash)
+      if (window.location.hash.includes('/sale-day')) {
+        window.history.replaceState(null, '', buildRouteHash(route))
+      }
       void leaveGuardRef.current(route).then((ok) => {
         if (!ok) {
           // Keep editing: put the address bar back where the screen still is.
@@ -1430,6 +1441,10 @@ function App() {
             large
             onSell={(target) => sellFlow.openSell(target)}
             onUndoSale={(target) => void sellFlow.undoSale(target)}
+            onAddToSale={(target) => {
+              addItemToStoredCart(target.sale_id, target.id, remainingUnits(target))
+              void navigate({ view: 'checkout', saleId: target.sale_id })
+            }}
           />
           {soldUnits(editingItem) > 0 ? (
             <fieldset className="payment-choices">
@@ -1710,9 +1725,22 @@ function App() {
         onNavigate={(route) => void navigate(route)}
         onAddItem={() => void startAddingItem()}
       />
-    <main className="app-shell">
+    <main className={`app-shell ${view === 'checkout' ? 'is-wide' : ''}`}>
       <header className="app-header">
         <h1>Muffin Manor Estate Sales</h1>
+        {workspace ? (
+          <p className="current-estate">
+            <span>Estate sale:</span>
+            <strong>{workspace.sale.title}</strong>
+            <button
+              type="button"
+              className="text-button"
+              onClick={() => void navigate({ view: 'sales', saleId: workspace.sale.id, section: null })}
+            >
+              Switch
+            </button>
+          </p>
+        ) : null}
       </header>
 
       {errorMessage ? <div className="notice error">{errorMessage}</div> : null}
@@ -1732,18 +1760,30 @@ function App() {
         </div>
       ) : null}
 
-      {view === 'sale-day' ? (
+      {view === 'checkout' ? (
         loading || !workspace ? (
           <section className="surface empty-block">
-            <h2>{loading ? 'Loading...' : 'No sale selected'}</h2>
+            <h2>{loading ? 'Loading...' : 'No estate sale yet'}</h2>
+            {loading ? null : (
+              <button
+                type="button"
+                className="primary-button"
+                onClick={() => void navigate({ view: 'sales', section: null })}
+              >
+                Create an estate sale
+              </button>
+            )}
           </section>
         ) : (
-          <SaleDayView
+          <SalePage
+            key={workspace.sale.id}
             workspace={workspace}
             categoryLookup={categoryLookup}
-            onSell={(item) => sellFlow.openSell(item)}
-            onUndoSale={(item) => void sellFlow.undoSale(item)}
             onOpenPhoto={setPhotoViewer}
+            onItemsChanged={async () => {
+              changeSeqRef.current += 1
+              await refreshQuietly(workspace.sale.id)
+            }}
           />
         )
       ) : null}
@@ -1763,24 +1803,25 @@ function App() {
 
       {view === 'sales' ? (
       <>
+      {activeSection !== 'items' ? (
       <section className="surface" id="section-sales">
         <div className="section-heading">
           <div>
-            <h2>Sales</h2>
+            <h2>Estate sales</h2>
           </div>
           <button
             type="button"
             className="secondary-button"
             onClick={() => setShowNewSaleForm((current) => !current)}
           >
-            {showNewSaleForm ? 'Close' : 'New sale'}
+            {showNewSaleForm ? 'Close' : 'New estate sale'}
           </button>
         </div>
 
         {dashboard?.sales.length ? (
           <>
             <label>
-              Current sale
+              Open estate sale
               <select
                 value={selectedSaleId ?? ''}
                 onChange={(event) => void handleSaleSelection(Number(event.target.value))}
@@ -1810,13 +1851,13 @@ function App() {
             </div>
           </>
         ) : (
-          <p className="empty-copy">No sales yet. Start with one simple sale.</p>
+          <p className="empty-copy">No estate sales yet. Add the first one here.</p>
         )}
 
         {showNewSaleForm || (dashboard?.sales.length ?? 0) === 0 ? (
           <form className="stack-form" onSubmit={(event) => void handleCreateSale(event)}>
             <label>
-              Sale name
+              Estate sale name
               <input
                 type="text"
                 value={newSaleForm.title}
@@ -1861,11 +1902,13 @@ function App() {
               </label>
             </div>
             <button type="submit" className="primary-button" disabled={saving}>
-              Save sale
+              Save estate sale
             </button>
           </form>
         ) : null}
       </section>
+
+      ) : null}
 
       {loading ? (
         <section className="surface empty-block">
@@ -1875,6 +1918,7 @@ function App() {
 
       {!loading && workspace ? (
         <>
+          {activeSection === 'items' ? (
           <details className="surface" id="section-items" open>
             <summary>Items</summary>
             <div className="details-body">
@@ -1916,7 +1960,7 @@ function App() {
               {photoSearchOpen ? (
                 <PhotoSearchPanel
                   saleId={workspace.sale.id}
-                  scopeLabel="this sale"
+                  scopeLabel="this estate sale"
                   onClose={() => setPhotoSearchOpen(false)}
                   onOpenItem={async (item) => {
                     if (!(await confirmDiscard('item'))) {
@@ -2024,7 +2068,8 @@ function App() {
               {showItemForm && itemForm.id === null ? itemEditorForm : null}
             </div>
           </details>
-
+          ) : (
+          <>
           <details className="surface" id="section-tasks">
             <summary>Tasks</summary>
             <div className="details-body">
@@ -2117,11 +2162,11 @@ function App() {
           </details>
 
           <details className="surface" id="section-details">
-            <summary>Sale details</summary>
+            <summary>Estate sale details</summary>
             <div className="details-body">
               <form className="stack-form" onSubmit={(event) => void handleUpdateSale(event)}>
                 <label>
-                  Sale name
+                  Estate sale name
                   <input
                     type="text"
                     value={saleEditor.title}
@@ -2194,7 +2239,7 @@ function App() {
                   />
                 </label>
                 <button type="submit" className="primary-button" disabled={saving}>
-                  Save sale details
+                  Save estate sale details
                 </button>
               </form>
             </div>
@@ -2314,13 +2359,24 @@ function App() {
               ) : null}
             </div>
           </details>
+          </>
+          )}
         </>
       ) : null}
 
       {!loading && !workspace ? (
         <section className="surface empty-block">
-          <h2>No sale selected</h2>
-          <p className="empty-copy">Create the first sale and the rest of the app will stay simple.</p>
+          <h2>No estate sale yet</h2>
+          <p className="empty-copy">Create the first estate sale and the rest of the app will stay simple.</p>
+          {activeSection === 'items' ? (
+            <button
+              type="button"
+              className="primary-button"
+              onClick={() => void navigate({ view: 'sales', section: null })}
+            >
+              Create an estate sale
+            </button>
+          ) : null}
         </section>
       ) : null}
       </>
@@ -2347,7 +2403,7 @@ function App() {
               <div>
                 <h3 id="duplicate-title">Already added?</h3>
                 <p id="duplicate-body">
-                  You already added &ldquo;{duplicatePrompt.existing.title}&rdquo; to this sale (qty{' '}
+                  You already added &ldquo;{duplicatePrompt.existing.title}&rdquo; to this estate sale (qty{' '}
                   {duplicatePrompt.existing.quantity ?? 1}
                   {duplicatePrompt.existing.price === null
                     ? ', unpriced'

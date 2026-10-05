@@ -1,4 +1,9 @@
-export type AppView = 'sales' | 'items' | 'sale-day'
+/**
+ * Screens: `checkout` is the Sale page (ring up a customer), `sales` the open
+ * estate sale (its inventory and, further down, its setup sections), `items`
+ * every item across all estate sales.
+ */
+export type AppView = 'checkout' | 'sales' | 'items'
 export type SaleSection = 'items' | 'tasks' | 'details' | 'categories'
 
 export interface AppRoute {
@@ -10,38 +15,53 @@ export interface AppRoute {
 export const saleSections: Array<{ id: SaleSection; label: string }> = [
   { id: 'items', label: 'Items' },
   { id: 'tasks', label: 'Tasks' },
-  { id: 'details', label: 'Sale details' },
+  { id: 'details', label: 'Estate sale details' },
   { id: 'categories', label: 'Categories & stats' },
 ]
 
 const sectionIds = new Set<string>(saleSections.map((section) => section.id))
 
-/** Read a route from the URL hash: #/items, #/sale/3, #/sale/3/tasks or #/sale/3/sale-day. */
+function validId(value: string | undefined): number | null {
+  const id = Number(value)
+  return Number.isInteger(id) && id > 0 ? id : null
+}
+
+/**
+ * Read a route from the URL hash: #/items, #/checkout/3, #/sales, #/sale/3 or #/sale/3/tasks.
+ * The old Sale day address (#/sale/3/sale-day) opens the Sale page.
+ */
 export function parseRouteHash(hash: string): AppRoute {
   const parts = hash.replace(/^#\/?/, '').split('/').filter(Boolean)
   if (parts[0] === 'items') {
     return { view: 'items' }
   }
+  if (parts[0] === 'checkout') {
+    return { view: 'checkout', saleId: validId(parts[1]) }
+  }
   if (parts[0] === 'sale') {
-    const saleId = Number(parts[1])
-    if (parts[2] === 'sale-day' && Number.isFinite(saleId) && saleId > 0) {
-      return { view: 'sale-day', saleId }
+    const saleId = validId(parts[1])
+    if (parts[2] === 'sale-day') {
+      return { view: 'checkout', saleId }
     }
     const section = parts[2] && sectionIds.has(parts[2]) ? (parts[2] as SaleSection) : null
-    return { view: 'sales', saleId: Number.isFinite(saleId) && saleId > 0 ? saleId : null, section }
+    return { view: 'sales', saleId, section }
   }
-  return { view: 'sales' }
+  if (parts[0] === 'sales') {
+    return { view: 'sales', section: null }
+  }
+  // Opening the app lands on the open estate sale's items.
+  return { view: 'sales', section: 'items' }
 }
 
 export function buildRouteHash(route: AppRoute): string {
   if (route.view === 'items') {
     return '#/items'
   }
-  if (route.saleId === null || route.saleId === undefined) {
-    return '#/sales'
+  if (route.view === 'checkout') {
+    return route.saleId == null ? '#/checkout' : `#/checkout/${route.saleId}`
   }
-  if (route.view === 'sale-day') {
-    return `#/sale/${route.saleId}/sale-day`
+  if (route.saleId === null || route.saleId === undefined) {
+    return route.section === 'items' ? '#/' : '#/sales'
   }
   return `#/sale/${route.saleId}${route.section ? `/${route.section}` : ''}`
 }

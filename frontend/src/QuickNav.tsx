@@ -1,6 +1,5 @@
 import { useState } from 'react'
 import type { ReactNode } from 'react'
-import { saleSections } from './routes'
 import type { AppRoute, AppView, SaleSection } from './routes'
 
 function Icon({ children }: { children: ReactNode }) {
@@ -19,15 +18,17 @@ const stroke = {
   strokeLinejoin: 'round' as const,
 }
 
-const icons: Record<'sales' | 'all' | 'add' | SaleSection | 'more' | 'saleDay', ReactNode> = {
-  saleDay: (
+type IconName = 'sell' | 'estates' | 'all' | 'add' | 'items' | 'tasks' | 'details' | 'categories' | 'more'
+
+const icons: Record<IconName, ReactNode> = {
+  sell: (
     <Icon>
       <rect {...stroke} x="3" y="6" width="18" height="12" rx="2" />
       <circle {...stroke} cx="12" cy="12" r="2.5" />
       <path {...stroke} d="M6 9v.01M18 15v.01" />
     </Icon>
   ),
-  sales: (
+  estates: (
     <Icon>
       <path {...stroke} d="M3 10.5 12 4l9 6.5M5 9.5V20h14V9.5M10 20v-5h4v5" />
     </Icon>
@@ -76,6 +77,14 @@ const icons: Record<'sales' | 'all' | 'add' | SaleSection | 'more' | 'saleDay', 
   ),
 }
 
+/** Setting up and running the estate sale itself (the event at a house). */
+const setupEntries: Array<{ section: SaleSection | null; label: string; icon: IconName }> = [
+  { section: null, label: 'Estate sales', icon: 'estates' },
+  { section: 'details', label: 'Estate sale details', icon: 'details' },
+  { section: 'tasks', label: 'Tasks', icon: 'tasks' },
+  { section: 'categories', label: 'Categories & stats', icon: 'categories' },
+]
+
 interface QuickNavProps {
   view: AppView
   section: SaleSection | null
@@ -87,37 +96,84 @@ interface QuickNavProps {
 
 /**
  * The always-visible menu: a left sidebar on laptops and a bottom tab bar on
- * tablets and phones. CSS decides which of the two is shown.
+ * tablets and phones (CSS decides which). Daily work first -- Sale (ring up a
+ * customer), Items, Add item, All items -- then, set apart, everything about
+ * the estate sale itself: the list of estate sales (switch or create), its
+ * details, tasks, categories & stats. On the bottom bar those live under More.
  */
 export function QuickNav({ view, section, saleId, saleTitle, onNavigate, onAddItem }: QuickNavProps) {
   const [moreOpen, setMoreOpen] = useState(false)
   const hasSale = saleId !== null && saleTitle !== null
-  const salesActive = view === 'sales' && section === null
-  const moreSections = saleSections.filter((entry) => entry.id !== 'items')
-  const moreActive =
-    view === 'sale-day' || (view === 'sales' && moreSections.some((entry) => entry.id === section))
+  const saleActive = view === 'checkout'
+  const itemsActive = view === 'sales' && section === 'items'
+  const setupActive = view === 'sales' && section !== 'items'
 
   function go(route: AppRoute): void {
     setMoreOpen(false)
     onNavigate(route)
   }
 
+  function addItem(): void {
+    setMoreOpen(false)
+    onAddItem()
+  }
+
   function current(active: boolean): { 'aria-current'?: 'page' } {
     return active ? { 'aria-current': 'page' } : {}
+  }
+
+  const visibleSetup = setupEntries.filter((entry) => hasSale || entry.section === null)
+
+  function setupLinks(role?: 'menuitem') {
+    return visibleSetup.map((entry) => {
+      const active = view === 'sales' && section === entry.section
+      return (
+        <button
+          type="button"
+          role={role}
+          key={entry.label}
+          className={`nav-link ${active ? 'active' : ''}`}
+          {...current(active)}
+          onClick={() => go({ view: 'sales', saleId, section: entry.section })}
+        >
+          {icons[entry.icon]}
+          <span>{entry.label}</span>
+        </button>
+      )
+    })
   }
 
   return (
     <>
       <nav className="side-nav" aria-label="Main menu">
         <p className="side-nav-brand">Muffin Manor</p>
+        <div className="nav-current-estate">
+          <span>Estate sale</span>
+          <strong title={saleTitle ?? undefined}>{saleTitle ?? 'None yet'}</strong>
+        </div>
         <button
           type="button"
-          className={`nav-link ${salesActive ? 'active' : ''}`}
-          {...current(salesActive)}
-          onClick={() => go({ view: 'sales', saleId, section: null })}
+          className={`nav-link nav-sale ${saleActive ? 'active' : ''}`}
+          {...current(saleActive)}
+          disabled={!hasSale}
+          onClick={() => go({ view: 'checkout', saleId })}
         >
-          {icons.sales}
-          <span>Sales</span>
+          {icons.sell}
+          <span>Sale</span>
+        </button>
+        <button
+          type="button"
+          className={`nav-link ${itemsActive ? 'active' : ''}`}
+          {...current(itemsActive)}
+          disabled={!hasSale}
+          onClick={() => go({ view: 'sales', saleId, section: 'items' })}
+        >
+          {icons.items}
+          <span>Items</span>
+        </button>
+        <button type="button" className="primary-button nav-add" disabled={!hasSale} onClick={addItem}>
+          {icons.add}
+          <span>Add item</span>
         </button>
         <button
           type="button"
@@ -129,76 +185,22 @@ export function QuickNav({ view, section, saleId, saleTitle, onNavigate, onAddIt
           <span>All items</span>
         </button>
 
-        {hasSale ? (
-          <div className="side-nav-group">
-            <p className="side-nav-label" title={saleTitle}>
-              {saleTitle}
-            </p>
-            <button type="button" className="primary-button nav-add" onClick={() => {
-                setMoreOpen(false)
-                onAddItem()
-              }}>
-              {icons.add}
-              <span>Add item</span>
-            </button>
-            <button
-              type="button"
-              className={`nav-link ${view === 'sale-day' ? 'active' : ''}`}
-              {...current(view === 'sale-day')}
-              onClick={() => go({ view: 'sale-day', saleId })}
-            >
-              {icons.saleDay}
-              <span>Sale day</span>
-            </button>
-            {saleSections.map((entry) => {
-              const active = view === 'sales' && section === entry.id
-              return (
-                <button
-                  type="button"
-                  key={entry.id}
-                  className={`nav-link ${active ? 'active' : ''}`}
-                  {...current(active)}
-                  onClick={() => go({ view: 'sales', saleId, section: entry.id })}
-                >
-                  {icons[entry.id]}
-                  <span>{entry.label}</span>
-                </button>
-              )
-            })}
-          </div>
-        ) : null}
+        <div className="side-nav-group">
+          <p className="side-nav-label">Estate sales</p>
+          {setupLinks()}
+        </div>
       </nav>
 
-      {moreOpen && hasSale ? (
+      {moreOpen ? (
         <div className="nav-sheet-backdrop" onClick={() => setMoreOpen(false)}>
           <div
             className="nav-sheet"
             role="menu"
-            aria-label={`More for ${saleTitle}`}
+            aria-label="Estate sales"
             onClick={(event) => event.stopPropagation()}
           >
-            <p className="side-nav-label">{saleTitle}</p>
-            <button
-              type="button"
-              role="menuitem"
-              className={`nav-link ${view === 'sale-day' ? 'active' : ''}`}
-              onClick={() => go({ view: 'sale-day', saleId })}
-            >
-              {icons.saleDay}
-              <span>Sale day</span>
-            </button>
-            {moreSections.map((entry) => (
-              <button
-                type="button"
-                role="menuitem"
-                key={entry.id}
-                className={`nav-link ${view === 'sales' && section === entry.id ? 'active' : ''}`}
-                onClick={() => go({ view: 'sales', saleId, section: entry.id })}
-              >
-                {icons[entry.id]}
-                <span>{entry.label}</span>
-              </button>
-            ))}
+            <p className="side-nav-label">{saleTitle ? `Estate sale: ${saleTitle}` : 'Estate sales'}</p>
+            {setupLinks('menuitem')}
           </div>
         </div>
       ) : null}
@@ -206,12 +208,27 @@ export function QuickNav({ view, section, saleId, saleTitle, onNavigate, onAddIt
       <nav className="bottom-nav" aria-label="Quick menu">
         <button
           type="button"
-          className={`tab-link ${salesActive ? 'active' : ''}`}
-          {...current(salesActive)}
-          onClick={() => go({ view: 'sales', saleId, section: null })}
+          className={`tab-link tab-sale ${saleActive ? 'active' : ''}`}
+          {...current(saleActive)}
+          disabled={!hasSale}
+          onClick={() => go({ view: 'checkout', saleId })}
         >
-          {icons.sales}
-          <span>Sales</span>
+          {icons.sell}
+          <span>Sale</span>
+        </button>
+        <button
+          type="button"
+          className={`tab-link ${itemsActive ? 'active' : ''}`}
+          {...current(itemsActive)}
+          disabled={!hasSale}
+          onClick={() => go({ view: 'sales', saleId, section: 'items' })}
+        >
+          {icons.items}
+          <span>Items</span>
+        </button>
+        <button type="button" className="tab-link tab-add" disabled={!hasSale} onClick={addItem}>
+          <span className="tab-add-circle">{icons.add}</span>
+          <span>Add item</span>
         </button>
         <button
           type="button"
@@ -224,32 +241,9 @@ export function QuickNav({ view, section, saleId, saleTitle, onNavigate, onAddIt
         </button>
         <button
           type="button"
-          className="tab-link tab-add"
-          disabled={!hasSale}
-          onClick={() => {
-            setMoreOpen(false)
-            onAddItem()
-          }}
-        >
-          <span className="tab-add-circle">{icons.add}</span>
-          <span>Add item</span>
-        </button>
-        <button
-          type="button"
-          className={`tab-link ${view === 'sales' && section === 'items' ? 'active' : ''}`}
-          {...current(view === 'sales' && section === 'items')}
-          disabled={!hasSale}
-          onClick={() => go({ view: 'sales', saleId, section: 'items' })}
-        >
-          {icons.items}
-          <span>Sale items</span>
-        </button>
-        <button
-          type="button"
-          className={`tab-link ${moreActive || moreOpen ? 'active' : ''}`}
+          className={`tab-link ${setupActive || moreOpen ? 'active' : ''}`}
           aria-expanded={moreOpen}
           aria-haspopup="menu"
-          disabled={!hasSale}
           onClick={() => setMoreOpen((open) => !open)}
         >
           {icons.more}
