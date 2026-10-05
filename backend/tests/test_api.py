@@ -674,7 +674,7 @@ def test_sell_records_partial_and_full_sales_with_price_and_payment_method() -> 
         assert body["sold_quantity"] == 2
         assert body["sold_total"] == 30
         assert body["payment_method"] == "cash"
-        assert body["sold_at"]
+        assert body["sold_at"].endswith(("Z", "+00:00"))  # always UTC with a zone, so "sold today" is right
         assert len(body["sale_events"]) == 1 and body["sale_events"][0]["amount"] == 30
 
         too_many = client.post(f"/api/items/{chairs['id']}/sell", json={"quantity": 4, "payment_method": "card"})

@@ -19,7 +19,14 @@ const stroke = {
   strokeLinejoin: 'round' as const,
 }
 
-const icons: Record<'sales' | 'all' | 'add' | SaleSection | 'more', ReactNode> = {
+const icons: Record<'sales' | 'all' | 'add' | SaleSection | 'more' | 'saleDay', ReactNode> = {
+  saleDay: (
+    <Icon>
+      <rect {...stroke} x="3" y="6" width="18" height="12" rx="2" />
+      <circle {...stroke} cx="12" cy="12" r="2.5" />
+      <path {...stroke} d="M6 9v.01M18 15v.01" />
+    </Icon>
+  ),
   sales: (
     <Icon>
       <path {...stroke} d="M3 10.5 12 4l9 6.5M5 9.5V20h14V9.5M10 20v-5h4v5" />
@@ -87,7 +94,8 @@ export function QuickNav({ view, section, saleId, saleTitle, onNavigate, onAddIt
   const hasSale = saleId !== null && saleTitle !== null
   const salesActive = view === 'sales' && section === null
   const moreSections = saleSections.filter((entry) => entry.id !== 'items')
-  const moreActive = view === 'sales' && moreSections.some((entry) => entry.id === section)
+  const moreActive =
+    view === 'sale-day' || (view === 'sales' && moreSections.some((entry) => entry.id === section))
 
   function go(route: AppRoute): void {
     setMoreOpen(false)
@@ -133,6 +141,15 @@ export function QuickNav({ view, section, saleId, saleTitle, onNavigate, onAddIt
               {icons.add}
               <span>Add item</span>
             </button>
+            <button
+              type="button"
+              className={`nav-link ${view === 'sale-day' ? 'active' : ''}`}
+              {...current(view === 'sale-day')}
+              onClick={() => go({ view: 'sale-day', saleId })}
+            >
+              {icons.saleDay}
+              <span>Sale day</span>
+            </button>
             {saleSections.map((entry) => {
               const active = view === 'sales' && section === entry.id
               return (
@@ -161,6 +178,15 @@ export function QuickNav({ view, section, saleId, saleTitle, onNavigate, onAddIt
             onClick={(event) => event.stopPropagation()}
           >
             <p className="side-nav-label">{saleTitle}</p>
+            <button
+              type="button"
+              role="menuitem"
+              className={`nav-link ${view === 'sale-day' ? 'active' : ''}`}
+              onClick={() => go({ view: 'sale-day', saleId })}
+            >
+              {icons.saleDay}
+              <span>Sale day</span>
+            </button>
             {moreSections.map((entry) => (
               <button
                 type="button"

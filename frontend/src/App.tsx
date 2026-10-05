@@ -28,6 +28,7 @@ import { ItemPhotosPanel } from './ItemPhotosPanel'
 import { ItemThumbnail } from './ItemThumbnail'
 import { PhotoSearchButton, PhotoSearchPanel } from './PhotoSearch'
 import { QuickNav } from './QuickNav'
+import { SaleDayView } from './SaleDayView'
 import { StatusMenu } from './StatusMenu'
 import { SellControls } from './SellControls'
 import { PAYMENT_METHODS, paymentLabel, remainingUnits, restoreSales, soldUnits } from './selling'
@@ -1194,7 +1195,7 @@ function App() {
   }
 
   function routeLeavesScreen(route: AppRoute): boolean {
-    return route.view !== view || (route.view === 'sales' && route.saleId != null && route.saleId !== selectedSaleId)
+    return route.view !== view || (route.view !== 'items' && route.saleId != null && route.saleId !== selectedSaleId)
   }
 
   useEffect(() => {
@@ -1349,7 +1350,7 @@ function App() {
       setView(route.view)
       setActiveSection(route.view === 'sales' ? (route.section ?? null) : null)
       pendingScrollRef.current = route.view === 'sales' && route.section ? `section-${route.section}` : 'top'
-      if (route.view === 'sales' && route.saleId != null && route.saleId !== selectedSaleId) {
+      if (route.view !== 'items' && route.saleId != null && route.saleId !== selectedSaleId) {
         return refreshWorkspaceAndDashboard(route.saleId)
       }
       return workspace
@@ -1729,6 +1730,22 @@ function App() {
             Retry
           </button>
         </div>
+      ) : null}
+
+      {view === 'sale-day' ? (
+        loading || !workspace ? (
+          <section className="surface empty-block">
+            <h2>{loading ? 'Loading...' : 'No sale selected'}</h2>
+          </section>
+        ) : (
+          <SaleDayView
+            workspace={workspace}
+            categoryLookup={categoryLookup}
+            onSell={(item) => sellFlow.openSell(item)}
+            onUndoSale={(item) => void sellFlow.undoSale(item)}
+            onOpenPhoto={setPhotoViewer}
+          />
+        )
       ) : null}
 
       {view === 'items' ? (

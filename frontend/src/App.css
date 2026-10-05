@@ -1600,3 +1600,136 @@ details[open] summary {
   align-self: flex-start;
   min-height: 44px;
 }
+
+/* ---------- Sale day: large type, sticky search and tally ---------- */
+.sale-day {
+  font-size: 18px;
+  padding-top: 0;
+}
+
+.sale-day-sticky {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  margin: 0 -18px;
+  padding: 14px 18px 12px;
+  border-radius: 24px 24px 0 0;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.sale-day-sticky h2 {
+  margin: 0;
+  font-size: 22px;
+}
+
+.sale-day-tally {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.sale-day-tally > div {
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: rgba(22, 163, 74, 0.1);
+  display: flex;
+  flex-direction: column;
+}
+
+.sale-day-tally span {
+  font-size: 14px;
+  color: var(--muted-text);
+}
+
+.sale-day-tally strong {
+  font-size: 22px;
+  color: #15803d;
+}
+
+.sale-day-methods {
+  margin: 0;
+  font-size: 15px;
+  color: var(--muted-text);
+}
+
+.sale-day-search {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.sale-day-search input {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 52px;
+  font-size: 20px;
+}
+
+.sale-day-filter button {
+  min-height: 48px;
+  font-size: 17px;
+}
+
+.sale-day-list {
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.sale-day-row {
+  padding: 10px;
+  border-radius: 18px;
+  background: var(--soft-bg);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.sale-day-row .item-thumb {
+  width: 72px;
+  height: 72px;
+}
+
+.sale-day-info {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sale-day-info strong {
+  font-size: 20px;
+  overflow-wrap: anywhere;
+}
+
+.sale-day-info span {
+  font-size: 18px;
+  color: var(--muted-text);
+}
+
+.sale-day-row .sell-controls {
+  flex: 0 0 auto;
+}
+
+.sale-day-row .sell-large .sell-button {
+  width: auto;
+  min-width: 132px;
+}
+
+@media (max-width: 520px) {
+  .sale-day-tally {
+    grid-template-columns: 1fr;
+  }
+
+  .sale-day-row {
+    flex-wrap: wrap;
+  }
+}

@@ -15,7 +15,7 @@ Rules (also used by reports and totals):
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlmodel import Session, select
 
@@ -36,6 +36,14 @@ class SoldState:
     @property
     def unrecorded(self) -> bool:
         return any(method is None for method, _ in self.payments)
+
+
+def as_utc(value: datetime | None) -> datetime | None:
+    """Sale times are stored in UTC; SQLite hands them back without a zone, so add it back."""
+
+    if value is None or value.tzinfo is not None:
+        return value
+    return value.replace(tzinfo=timezone.utc)
 
 
 def load_sale_events(session: Session, item_ids: list[int]) -> dict[int, list[ItemSaleEvent]]:
@@ -77,7 +85,7 @@ def sold_state(item: Item, events: list[ItemSaleEvent]) -> SoldState:
     return SoldState(
         sold_quantity=sold_quantity,
         sold_total=round(total, 2) if sold_quantity or events else None,
-        sold_at=max((event.sold_at for event in dated), default=None),
+        sold_at=as_utc(max((event.sold_at for event in dated), default=None)),
         payment_method=latest.payment_method if latest else None,
         payments=payments,
     )
@@ -102,7 +110,7 @@ def sold_fields(item: Item, events: list[ItemSaleEvent]) -> dict[str, object]:
                 "quantity": event.quantity,
                 "amount": event.amount,
                 "payment_method": event.payment_method,
-                "sold_at": event.sold_at,
+                "sold_at": as_utc(event.sold_at),
             }
             for event in events
         ],
