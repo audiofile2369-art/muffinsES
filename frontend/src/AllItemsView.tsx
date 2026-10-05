@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
-import { getAllItems } from './api'
+import { getAllItems, updateItemStatus } from './api'
 import { formatCurrency, itemMatchesSearch, searchTerms, titleCase } from './format'
 import { ItemThumbnail } from './ItemThumbnail'
 import { PhotoSearchButton, PhotoSearchPanel } from './PhotoSearch'
+import { StatusMenu } from './StatusMenu'
 import type { PhotoViewerState } from './ItemThumbnail'
-import type { ItemStatus, ItemWithSale } from './types'
+import type { ItemRead, ItemStatus, ItemWithSale } from './types'
 
 type SortOrder = 'newest' | 'name' | 'price-high' | 'price-low'
 type Layout = 'list' | 'grid'
@@ -39,10 +40,12 @@ function sortItems(items: ItemWithSale[], order: SortOrder): ItemWithSale[] {
 interface AllItemsViewProps {
   onOpenItem: (item: ItemWithSale) => void
   onOpenPhoto: (photo: PhotoViewerState) => void
+  /** Called after an item is changed here (e.g. its status), so the open sale stays in step. */
+  onItemChanged?: (item: ItemRead) => void
 }
 
 /** Every saved item across all sales, with search, filters, sort and a list/grid toggle. */
-export function AllItemsView({ onOpenItem, onOpenPhoto }: AllItemsViewProps) {
+export function AllItemsView({ onOpenItem, onOpenPhoto, onItemChanged }: AllItemsViewProps) {
   const [items, setItems] = useState<ItemWithSale[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -75,6 +78,32 @@ export function AllItemsView({ onOpenItem, onOpenPhoto }: AllItemsViewProps) {
       cancelled = true
     }
   }, [])
+
+  /** One-tap status change: shown at once, status-only save, put back if it fails. */
+  async function changeStatus(item: ItemWithSale, status: ItemStatus): Promise<void> {
+    const previous = item.status
+    const setStatus = (from: ItemStatus, to: ItemStatus): void =>
+      setItems((current) =>
+        current.map((existing) =>
+          existing.id === item.id && existing.status === from ? { ...existing, status: to } : existing,
+        ),
+      )
+    setStatus(previous, status)
+    try {
+      const saved = await updateItemStatus(item.id, status)
+      setItems((current) =>
+        current.map((existing) => (existing.id === saved.id ? { ...existing, ...saved } : existing)),
+      )
+      onItemChanged?.(saved)
+    } catch (changeError) {
+      setStatus(status, previous)
+      setError(
+        `Could not change "${item.title}" to ${titleCase(status)}: ${
+          changeError instanceof Error ? changeError.message : 'unknown error'
+        }`,
+      )
+    }
+  }
 
   function changeLayout(next: Layout): void {
     setLayout(next)
@@ -271,13 +300,17 @@ export function AllItemsView({ onOpenItem, onOpenPhoto }: AllItemsViewProps) {
                   </small>
                 </div>
                 <div className="card-meta">
-                  <span className="status-pill">{titleCase(item.status)}</span>
                   <strong>
                     {item.price === null ? 'Unpriced' : formatCurrency(item.price)}
                     {(item.quantity ?? 1) > 1 ? <span className="quantity-badge"> × {item.quantity}</span> : null}
                   </strong>
                 </div>
               </button>
+              <StatusMenu
+                status={item.status}
+                itemTitle={item.title}
+                onChange={(status) => void changeStatus(item, status)}
+              />
             </div>
           ))}
         </div>
@@ -290,13 +323,17 @@ export function AllItemsView({ onOpenItem, onOpenPhoto }: AllItemsViewProps) {
                 <strong>{item.title}</strong>
                 <small>{item.sale_title}</small>
                 <span className="grid-card-meta">
-                  <span className="status-pill">{titleCase(item.status)}</span>
                   <strong>
                     {item.price === null ? 'Unpriced' : formatCurrency(item.price)}
                     {(item.quantity ?? 1) > 1 ? <span className="quantity-badge"> × {item.quantity}</span> : null}
                   </strong>
                 </span>
               </button>
+              <StatusMenu
+                status={item.status}
+                itemTitle={item.title}
+                onChange={(status) => void changeStatus(item, status)}
+              />
             </div>
           ))}
         </div>

@@ -128,6 +128,12 @@ class ItemQuantityIncrement(SQLModel):
     amount: int = Field(default=1, ge=1, le=10000)
 
 
+class ItemStatusUpdate(SQLModel):
+    """Payload for changing only an item's status."""
+
+    status: ItemStatus
+
+
 class BulkItemUpdate(SQLModel):
     """Payload for applying a shared update to many items."""
 

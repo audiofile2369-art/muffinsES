@@ -7,6 +7,7 @@ import type {
   ItemPayload,
   ItemPhotoInfo,
   ItemRead,
+  ItemStatus,
   ItemUpdatePayload,
   ItemWithSale,
   ReportMetrics,
@@ -362,6 +363,18 @@ export async function incrementItemQuantity(itemId: number, amount: number): Pro
   }
 
   item.quantity = (item.quantity ?? 1) + amount
+  saveState(state)
+  return item
+}
+
+export async function updateItemStatus(itemId: number, status: ItemStatus): Promise<ItemRead> {
+  const state = loadState()
+  const item = state.items.find((currentItem) => currentItem.id === itemId)
+  if (!item) {
+    throw new Error('Item not found.')
+  }
+
+  item.status = status
   saveState(state)
   return item
 }

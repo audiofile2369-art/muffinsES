@@ -13,6 +13,7 @@ import {
   getWorkspace,
   importLegacyBrowserDataToBackend,
   incrementItemQuantity,
+  updateItemStatus,
   updateCategory,
   updateItem,
   updateSale,
@@ -25,6 +26,7 @@ import { ItemPhotosPanel } from './ItemPhotosPanel'
 import { ItemThumbnail } from './ItemThumbnail'
 import { PhotoSearchButton, PhotoSearchPanel } from './PhotoSearch'
 import { QuickNav } from './QuickNav'
+import { StatusMenu } from './StatusMenu'
 import { buildRouteHash, parseRouteHash } from './routes'
 import type { AppRoute, AppView, SaleSection } from './routes'
 import { stepPhotoViewer } from './photoViewer'
@@ -835,6 +837,43 @@ function App() {
     )
   }
 
+  /**
+   * One-tap status change from a list: shown at once, saved with the status-only
+   * endpoint (so nothing else on the item is overwritten), put back if it fails.
+   */
+  async function changeItemStatus(item: ItemRead, status: ItemStatus): Promise<boolean> {
+    const previous = item.status
+    const setStatus = (from: ItemStatus, to: ItemStatus): void =>
+      setWorkspace((current) =>
+        current
+          ? {
+              ...current,
+              items: current.items.map((existing) =>
+                existing.id === item.id && existing.status === from ? { ...existing, status: to } : existing,
+              ),
+            }
+          : current,
+      )
+    setStatus(previous, status)
+    // Keep an open editor for this item in step, so its next save does not undo the change.
+    setItemForm((current) => (current.id === item.id ? { ...current, status } : current))
+    try {
+      const saved = await updateItemStatus(item.id, status)
+      upsertItem(saved)
+      afterLocalChange(saved.sale_id)
+      return true
+    } catch (error) {
+      setStatus(status, previous)
+      setItemForm((current) =>
+        current.id === item.id && current.status === status ? { ...current, status: previous } : current,
+      )
+      setErrorMessage(
+        `Could not change "${item.title}" to ${titleCase(status)}: ${error instanceof Error ? error.message : 'unknown error'}`,
+      )
+      return false
+    }
+  }
+
   function anchorRow(itemId: number): void {
     const element = document.getElementById(`item-row-${itemId}`)
     if (!element) {
@@ -1309,7 +1348,16 @@ function App() {
       ) : null}
 
       {view === 'items' ? (
-        <AllItemsView onOpenItem={(item) => void openItemFromAllItems(item)} onOpenPhoto={setPhotoViewer} />
+        <AllItemsView
+          onOpenItem={(item) => void openItemFromAllItems(item)}
+          onOpenPhoto={setPhotoViewer}
+          onItemChanged={(item) => {
+            upsertItem(item)
+            if (workspace) {
+              afterLocalChange(workspace.sale.id)
+            }
+          }}
+        />
       ) : null}
 
       {view === 'sales' ? (
@@ -1511,13 +1559,17 @@ function App() {
                           </small>
                         </div>
                         <div className="card-meta">
-                          <span className="status-pill">{titleCase(item.status)}</span>
                           <strong>
                             {item.price === null ? 'Unpriced' : formatCurrency(item.price)}
                             {(item.quantity ?? 1) > 1 ? <span className="quantity-badge"> × {item.quantity}</span> : null}
                           </strong>
                         </div>
                       </button>
+                      <StatusMenu
+                        status={item.status}
+                        itemTitle={item.title}
+                        onChange={(status) => void changeItemStatus(item, status)}
+                      />
                     </div>
                     {itemForm.id === item.id ? <div className="item-inline-editor">{itemEditorForm}</div> : null}
                     </Fragment>

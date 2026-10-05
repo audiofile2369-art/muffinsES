@@ -6,6 +6,7 @@ import type {
   ItemPayload,
   ItemPhotoInfo,
   ItemRead,
+  ItemStatus,
   ItemUpdatePayload,
   ItemWithSale,
   PhotoSearchResponse,
@@ -193,6 +194,18 @@ export function incrementItemQuantity(itemId: number, amount: number): Promise<I
   return request<ItemRead>(`/items/${itemId}/quantity/increment`, {
     method: 'POST',
     body: JSON.stringify({ amount }),
+  })
+}
+
+/** Change only an item's status; the rest of the item is never resent. */
+export function updateItemStatus(itemId: number, status: ItemStatus): Promise<ItemRead> {
+  if (useBrowserDemoMode) {
+    return mockApi.updateItemStatus(itemId, status)
+  }
+
+  return request<ItemRead>(`/items/${itemId}/status`, {
+    method: 'PATCH',
+    body: JSON.stringify({ status }),
   })
 }
 

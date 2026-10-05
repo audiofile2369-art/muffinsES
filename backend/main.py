@@ -33,6 +33,7 @@ from backend.core.schemas import (
     PricingEstimateResponse,
     ItemQuantityIncrement,
     ItemRead,
+    ItemStatusUpdate,
     ItemUpdate,
     ItemWithSale,
     PhotoSearchMatch,
@@ -566,6 +567,26 @@ def increment_item_quantity(
     session.exec(
         update(Item).where(Item.id == item_id).values(quantity=Item.quantity + payload.amount)
     )
+    session.commit()
+    item = get_item_or_404(session, item_id)
+    session.refresh(item)
+    return build_item_read(session, item)
+
+
+@app.patch(f"{SETTINGS.api_prefix}/items/{{item_id}}/status", response_model=ItemRead)
+def update_item_status(
+    item_id: int,
+    payload: ItemStatusUpdate,
+    session: Session = Depends(get_db),
+) -> ItemRead:
+    """Change only an item's status (one-tap status / Sold from a list).
+
+    A single-column UPDATE, so a stale copy of the item in another tab can never
+    overwrite the item's other fields.
+    """
+
+    get_item_or_404(session, item_id)
+    session.exec(update(Item).where(Item.id == item_id).values(status=payload.status))
     session.commit()
     item = get_item_or_404(session, item_id)
     session.refresh(item)

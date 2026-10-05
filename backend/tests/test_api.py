@@ -593,3 +593,36 @@ def test_delete_item_removes_it_and_all_its_photos_with_foreign_keys_enforced() 
     finally:
         event.remove(database.engine, "connect", enable_foreign_keys)
         database.engine.dispose()
+
+
+def test_status_endpoint_changes_only_the_status() -> None:
+    """PATCH /items/{id}/status changes status alone, so a stale full copy elsewhere is never replayed."""
+
+    with TestClient(app) as client:
+        sale_id = client.post(
+            "/api/sales",
+            json={"title": "Status Sale", "start_date": "2026-10-01", "end_date": "2026-10-02"},
+        ).json()["id"]
+        item = client.post(
+            "/api/items",
+            json={"sale_id": sale_id, "title": "Oak desk", "price": 80, "quantity": 2, "notes": "old"},
+        ).json()
+        # Another tab edits the notes and price after this tab loaded the item.
+        client.patch(f"/api/items/{item['id']}", json={"title": "Oak desk", "price": 95, "quantity": 2, "notes": "new"})
+
+        sold = client.patch(f"/api/items/{item['id']}/status", json={"status": "sold"})
+        assert sold.status_code == 200
+        body = sold.json()
+        assert body["status"] == "sold"
+        assert body["notes"] == "new"
+        assert body["price"] == 95
+        assert body["quantity"] == 2
+
+        workspace = client.get(f"/api/sales/{sale_id}/workspace").json()
+        assert workspace["report"]["total_sold_value"] == 190
+
+        back = client.patch(f"/api/items/{item['id']}/status", json={"status": "available"})
+        assert back.json()["status"] == "available"
+        assert client.patch(f"/api/items/{item['id']}/status", json={"status": "bogus"}).status_code == 422
+        assert client.patch(f"/api/items/{item['id']}/status", json={}).status_code == 422
+        assert client.patch("/api/items/999999/status", json={"status": "sold"}).status_code == 404
