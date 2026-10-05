@@ -166,6 +166,23 @@ export function updateItem(itemId: number, payload: ItemUpdatePayload): Promise<
   })
 }
 
+/** Delete an item and all of its photos. */
+export async function deleteItem(itemId: number): Promise<void> {
+  if (useBrowserDemoMode) {
+    return mockApi.deleteItem(itemId)
+  }
+
+  if (API_BASE_URL === null) {
+    throw new Error('API base URL is not configured.')
+  }
+
+  const response = await fetch(`${API_BASE_URL}/items/${itemId}`, { method: 'DELETE' })
+  if (!response.ok) {
+    const message = await response.text()
+    throw new Error(extractErrorMessage(message, response.status))
+  }
+}
+
 /** Add `amount` more of an existing item without resending (and overwriting) the rest of it. */
 export function incrementItemQuantity(itemId: number, amount: number): Promise<ItemRead> {
   if (useBrowserDemoMode) {

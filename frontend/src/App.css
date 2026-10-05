@@ -1115,3 +1115,16 @@ details[open] summary {
   border-radius: 16px;
   scroll-margin-top: 80px;
 }
+
+.item-delete-zone {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px dashed var(--border);
+  display: flex;
+  justify-content: flex-start;
+}
+
+.danger-button {
+  color: #b91c1c;
+  border-color: rgba(185, 28, 28, 0.45);
+}

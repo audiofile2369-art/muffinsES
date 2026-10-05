@@ -6,6 +6,7 @@ import {
   createSale,
   createTask,
   addItemPhoto,
+  deleteItem,
   estimatePriceFromPhoto,
   getDashboard,
   getItemPhotoUrl,
@@ -725,6 +726,35 @@ function App() {
       : `The item was saved, but ${failed} photos could not be saved: ${reason}`
   }
 
+  /** Delete the item being edited (after a confirm) without reloading the whole screen. */
+  async function handleDeleteItem(): Promise<void> {
+    if (!workspace || itemForm.id === null) {
+      return
+    }
+    const itemId = itemForm.id
+    const saleId = workspace.sale.id
+    const name = itemForm.title.trim() || 'this item'
+    if (
+      !window.confirm(
+        `Delete "${name}"? This removes it and its photos from this sale. This cannot be undone.`,
+      )
+    ) {
+      return
+    }
+
+    await withSavingState(async () => {
+      await deleteItem(itemId)
+      resetItemEditor(false)
+      // Drop the row right away; then refresh totals quietly (no loading screen, no scroll jump).
+      setWorkspace((current) =>
+        current ? { ...current, items: current.items.filter((item) => item.id !== itemId) } : current,
+      )
+      const [nextDashboard, nextWorkspace] = await Promise.all([getDashboard(), getWorkspace(saleId)])
+      setDashboard(nextDashboard)
+      setWorkspace((current) => (current?.sale.id === saleId ? nextWorkspace : current))
+    })
+  }
+
   /** Put an updated item (e.g. new photo count) into the list without reloading the sale. */
   function applyItemChange(item: ItemRead): void {
     setWorkspace((current) =>
@@ -1147,6 +1177,18 @@ function App() {
       <button type="submit" className="primary-button" disabled={saving}>
         {itemForm.id === null ? 'Save item' : 'Update item'}
       </button>
+      {itemForm.id !== null ? (
+        <div className="item-delete-zone">
+          <button
+            type="button"
+            className="secondary-button danger-button"
+            disabled={saving}
+            onClick={() => void handleDeleteItem()}
+          >
+            Delete item
+          </button>
+        </div>
+      ) : null}
     </form>
   )
 

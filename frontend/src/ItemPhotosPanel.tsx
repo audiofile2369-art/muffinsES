@@ -330,7 +330,7 @@ export function ItemPhotosPanel({
       ) : (
         <p className="hint-copy">
           {itemId === null
-            ? 'Photos added here are saved when you press Add item. They do not run AI pricing.'
+            ? 'Photos added here are saved when you press Save item. They do not run AI pricing.'
             : 'Photos added here are saved right away. They do not run AI pricing.'}
         </p>
       )}

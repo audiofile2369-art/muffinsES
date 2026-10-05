@@ -324,6 +324,15 @@ export async function createItem(payload: ItemPayload): Promise<ItemRead> {
   return item
 }
 
+export async function deleteItem(itemId: number): Promise<void> {
+  const state = loadState()
+  if (!state.items.some((item) => item.id === itemId)) {
+    throw new Error('Item not found.')
+  }
+  state.items = state.items.filter((item) => item.id !== itemId)
+  saveState(state)
+}
+
 /** Browser demo mode never stores photos, so every item's photo list is empty. */
 export async function listItemPhotos(itemId: number): Promise<ItemPhotoInfo[]> {
   const state = loadState()

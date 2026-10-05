@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import func, update
+from sqlalchemy import delete, func, update
 from sqlmodel import Session, select
 
 from backend.config.database import close_db, database, get_db
@@ -443,6 +443,23 @@ def update_item(
     session.commit()
     session.refresh(item)
     return build_item_read(session, item)
+
+
+@app.delete(f"{SETTINGS.api_prefix}/items/{{item_id}}", status_code=204)
+def delete_item(item_id: int, session: Session = Depends(get_db)) -> Response:
+    """Delete an item and all of its photos (main and extra) in one transaction.
+
+    Photo rows reference the item by foreign key, so they are removed first and
+    everything commits together: an interruption leaves the item untouched.
+    """
+
+    item = get_item_or_404(session, item_id)
+    session.exec(delete(ItemGalleryPhoto).where(ItemGalleryPhoto.item_id == item_id))
+    session.exec(delete(ItemPhoto).where(ItemPhoto.item_id == item_id))
+    session.flush()
+    session.delete(item)
+    session.commit()
+    return Response(status_code=204)
 
 
 @app.post(f"{SETTINGS.api_prefix}/items/{{item_id}}/quantity/increment", response_model=ItemRead)

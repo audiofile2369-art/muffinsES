@@ -527,3 +527,69 @@ def test_gallery_table_is_added_without_touching_existing_photos(tmp_path: Path)
     with sqlite3.connect(db_path) as connection:
         assert connection.execute("SELECT item_id, data FROM itemphoto").fetchall() == [(1, JPEG_BYTES)]
         assert connection.execute("SELECT COUNT(*) FROM itemgalleryphoto").fetchone() == (0,)
+
+
+def test_delete_item_removes_it_and_all_its_photos_with_foreign_keys_enforced() -> None:
+    """Deleting an item removes its main and extra photos too, and never trips a foreign key."""
+
+    import pytest
+    from sqlalchemy import event
+    from sqlalchemy.exc import IntegrityError
+    from sqlmodel import Session
+
+    from backend.config.database import database
+    from backend.core.models import Item, ItemGalleryPhoto, ItemPhoto
+
+    def enable_foreign_keys(dbapi_connection, _record) -> None:
+        dbapi_connection.execute("PRAGMA foreign_keys=ON")
+
+    event.listen(database.engine, "connect", enable_foreign_keys)
+    database.engine.dispose()
+    try:
+        with TestClient(app) as client:
+            sale_id, item_id = _create_sale_and_item(client)
+            other_id = client.post(
+                "/api/items", json={"sale_id": sale_id, "title": "Oak table", "price": 40}
+            ).json()["id"]
+            client.patch(f"/api/items/{item_id}", json={"price": 15})
+            _add_photo(client, item_id, JPEG_BYTES, "image/jpeg")
+            _add_photo(client, item_id, PNG_BYTES, "image/png")
+            _add_photo(client, other_id, PNG_BYTES, "image/png")
+            extra_id = client.get(f"/api/items/{item_id}/photos").json()[1]["id"]
+
+            # Foreign keys really are enforced: a bare delete of an item with photos fails.
+            with Session(database.engine) as session:
+                with pytest.raises(IntegrityError):
+                    session.delete(session.get(Item, item_id))
+                    session.commit()
+
+            def sale_summary() -> dict:
+                return next(
+                    sale for sale in client.get("/api/dashboard").json()["sales"] if sale["id"] == sale_id
+                )
+
+            assert sale_summary()["item_count"] == 2
+
+            deleted = client.delete(f"/api/items/{item_id}")
+            assert deleted.status_code == 204
+
+            assert client.get(f"/api/items/{item_id}/photo").status_code == 404
+            assert client.get(f"/api/items/{item_id}/photos/{extra_id}").status_code == 404
+            assert client.get(f"/api/items/{item_id}/photos").status_code == 404
+            workspace = client.get(f"/api/sales/{sale_id}/workspace").json()
+            assert [item["id"] for item in workspace["items"]] == [other_id]
+            assert sale_summary()["item_count"] == 1
+            assert item_id not in {item["id"] for item in client.get("/api/items").json()}
+
+            # The other item and its photo are untouched.
+            assert workspace["items"][0]["photo_count"] == 1
+            assert client.get(f"/api/items/{other_id}/photo").content == PNG_BYTES
+            with Session(database.engine) as session:
+                assert session.get(ItemPhoto, item_id) is None
+                assert session.get(ItemGalleryPhoto, extra_id) is None
+
+            assert client.delete(f"/api/items/{item_id}").status_code == 404
+            assert client.delete("/api/items/999999").status_code == 404
+    finally:
+        event.remove(database.engine, "connect", enable_foreign_keys)
+        database.engine.dispose()
