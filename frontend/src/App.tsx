@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import {
   createCategory,
@@ -269,6 +269,9 @@ function App() {
   const pendingScrollRef = useRef<string | null>(null)
   const pricingAutofillRef = useRef<PricingAutofill>({})
   const shownSaleIdRef = useRef<number | null>(null)
+  // A list row to hold at the same place on screen across the next render(s),
+  // so opening, moving or saving the inline editor never makes the list jump.
+  const rowAnchorRef = useRef<{ id: string; top: number } | null>(null)
 
   const categoryLookup = useMemo(() => {
     const entries: Array<[number, string]> =
@@ -674,6 +677,9 @@ function App() {
       const resolvedCategoryId = await resolveCategoryId(itemForm.categoryName)
 
       let savedItem: ItemRead
+      if (itemForm.id !== null) {
+        anchorRow(itemForm.id)
+      }
       if (itemForm.id === null) {
         savedItem = await createItem({
           ...buildItemPayload(workspace.sale.id),
@@ -708,6 +714,18 @@ function App() {
       const reason = error instanceof Error ? error.message : 'Unknown error.'
       return `The item was saved, but its photo could not be saved: ${reason}`
     }
+  }
+
+  function anchorRow(itemId: number): void {
+    const element = document.getElementById(`item-row-${itemId}`)
+    if (!element) {
+      rowAnchorRef.current = null
+      return
+    }
+    // Hold the row where it is, but on screen: after saving from the bottom of a
+    // long form the row may have scrolled out of view above.
+    const top = element.getBoundingClientRect().top
+    rowAnchorRef.current = { id: element.id, top: Math.min(Math.max(top, 16), window.innerHeight - 120) }
   }
 
   async function handleTaskSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
@@ -817,6 +835,23 @@ function App() {
       window.history.replaceState(null, '', nextHash)
     }
   }, [activeSection, loading, selectedSaleId, view])
+
+  // Keep an anchored list row where it was on screen (before paint, so nothing jumps).
+  useLayoutEffect(() => {
+    const anchor = rowAnchorRef.current
+    if (loading || anchor === null) {
+      return
+    }
+    const element = document.getElementById(anchor.id)
+    if (!element) {
+      return
+    }
+    rowAnchorRef.current = null
+    const shift = element.getBoundingClientRect().top - anchor.top
+    if (Math.abs(shift) > 1) {
+      window.scrollBy({ top: shift, behavior: 'instant' })
+    }
+  })
 
   // Scroll once the requested view or section has rendered.
   useEffect(() => {
@@ -1284,7 +1319,14 @@ function App() {
                         type="button"
                         className="item-row-main"
                         aria-expanded={itemForm.id === item.id}
-                        onClick={() => (itemForm.id === item.id ? resetItemEditor(false) : beginEditingItem(item))}
+                        onClick={() => {
+                          anchorRow(item.id)
+                          if (itemForm.id === item.id) {
+                            resetItemEditor(false)
+                          } else {
+                            beginEditingItem(item)
+                          }
+                        }}
                       >
                         <div>
                           <strong>{item.title}</strong>
