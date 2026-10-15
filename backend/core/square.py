@@ -261,8 +261,8 @@ def verify_payment(client: SquareClient, payment_id: str, expected_cents: int, c
     amount = payment.get("amount_money") or {}
     if int(amount.get("amount") or -1) != expected_cents or (amount.get("currency") or currency) != currency:
         raise SquareServiceError(
-            f"Square shows {from_cents(int(amount.get('amount') or 0)):.2f} {amount.get('currency') or ''} paid, "
-            f"but this sale is {from_cents(expected_cents):.2f} {currency}.",
+            f"Square shows ${from_cents(int(amount.get('amount') or 0)):.2f} paid, "
+            f"but this sale is ${from_cents(expected_cents):.2f}.",
             409,
         )
     return payment
@@ -504,7 +504,7 @@ def finalize(session: Session, payment_id: int, square_payment_id: str, square_o
             square_payment_id=square_payment_id,
             square_order_id=square_order_id or payment.square_order_id,
             message=(
-                f"Square took {from_cents(payment.amount_cents):.2f} but nothing was marked sold: {problem}. "
+                f"Square took ${from_cents(payment.amount_cents):.2f} but nothing was marked sold: {problem}. "
                 f"Refund it (Square payment {square_payment_id})."
             ),
         )
@@ -689,7 +689,7 @@ def refund(session: Session, payment: SquarePayment, reason: str) -> SquarePayme
         raise SquareServiceError(f"Square did not refund the payment ({status or 'no answer'}). Nothing was voided.", 502)
     payment = _lock(session, payment.id)
     return _save(session, payment, status=REFUNDED, square_refund_id=result.get("id"),
-                 message=f"Refunded {from_cents(payment.amount_cents):.2f} in Square.")
+                 message=f"Refunded ${from_cents(payment.amount_cents):.2f} in Square.")
 
 
 def square_payments_by_order(session: Session, order_ids: list[int]) -> dict[int, SquarePayment]:
@@ -842,12 +842,15 @@ def pair_square_device(payload: SquarePairRequest, session: Session = Depends(ge
     return device_read(device)
 
 
-@router.delete(f"{PREFIX}/square/devices/{{device_pk}}", status_code=204)
-def remove_square_device(device_pk: int, session: Session = Depends(get_db)) -> None:
+@router.delete(f"{PREFIX}/square/devices/{{device_pk}}", response_model=dict)
+def remove_square_device(device_pk: int, session: Session = Depends(get_db)) -> dict:
+    """Forget a paired Terminal here (unpair it on the Terminal itself to reuse it elsewhere)."""
+
     device = session.get(SquareDevice, device_pk)
     if device is not None:
         session.delete(device)
         session.commit()
+    return {"ok": True}
 
 
 @router.post(f"{PREFIX}/sales/{{sale_id}}/square/charges", response_model=SquarePaymentRead)
