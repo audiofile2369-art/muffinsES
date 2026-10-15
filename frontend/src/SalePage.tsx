@@ -1,5 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ApiError, checkoutSale, getSaleOrders, voidSaleOrder } from './api'
+import { lastFour, refundAndVoidOrder } from './square/api'
+import type { SquarePayment } from './square/api'
+import { SquareChargeSheet } from './square/SquareChargeSheet'
+import { peekSquareCallback } from './square/posLink'
+import type { PosCallback } from './square/posLink'
 import { emptyCart, readCart, writeCart } from './cart'
 import type { Cart, CartLine } from './cart'
 import { parseMoney, priceCart } from './checkout'
@@ -100,7 +105,15 @@ export function SalePage({ workspace, categoryLookup, onOpenPhoto, onItemsChange
   const [conflicts, setConflicts] = useState<Map<number, CheckoutUnavailable>>(new Map())
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [completed, setCompleted] = useState<{ order: OrderRead; change: number | null; cart: Cart } | null>(null)
+  const [completed, setCompleted] = useState<{
+    order: OrderRead
+    change: number | null
+    cart: Cart
+    squarePaymentId?: string | null
+  } | null>(null)
+  // Charging through Square: the sheet is open; `squareResume` is the Square app's answer after it sent us back.
+  const [squareResume, setSquareResume] = useState<PosCallback | null>(() => peekSquareCallback())
+  const [squareOpen, setSquareOpen] = useState(() => squareResume !== null)
   const [orders, setOrders] = useState<OrderRead[] | null>(null)
   const [ordersError, setOrdersError] = useState<string | null>(null)
   const [openOrderId, setOpenOrderId] = useState<number | null>(null)
@@ -283,6 +296,11 @@ export function SalePage({ workspace, categoryLookup, onOpenPhoto, onItemsChange
     if (cartLines.length === 0 || problems > 0 || priced.totalTooHigh || submitting) {
       return
     }
+    if (paymentMethod === 'square') {
+      setError(null)
+      setSquareOpen(true)
+      return
+    }
     const confirmed = window.confirm(
       `Complete this sale?\n\n${units(itemCount)} · Total ${formatMoney(priced.total)} · ${paymentLabel(paymentMethod)}`,
     )
@@ -312,6 +330,28 @@ export function SalePage({ workspace, categoryLookup, onOpenPhoto, onItemsChange
     }
   }
 
+  function finishSquareSale(payment: SquarePayment): void {
+    const order = payment.order
+    if (!order) {
+      return
+    }
+    writeLastPaymentMethod('square')
+    setCompleted({ order, change: null, cart, squarePaymentId: payment.square_payment_id })
+    setCart({ ...emptyCart(), paymentMethod: 'square' })
+    setConflicts(new Map())
+    setSquareOpen(false)
+    setSquareResume(null)
+    setOrders((current) => [order, ...(current ?? []).filter((entry) => entry.id !== order.id)])
+    void Promise.all([onItemsChanged(), reloadOrders()])
+  }
+
+  function squareUnavailable(saleError: ApiError): void {
+    setSquareOpen(false)
+    setConflicts(new Map(saleError.unavailable.map((entry) => [entry.item_id, entry])))
+    setError('Some items were sold on another device. Fix the lines marked in red, then try again. Nothing was charged.')
+    void Promise.all([onItemsChanged(), reloadOrders()])
+  }
+
   async function voidOrder(order: OrderRead, restoreCart: Cart | null = null): Promise<void> {
     const question = restoreCart
       ? `Undo this sale of ${formatMoney(order.total)}? The items go back on sale and back into the cart.`
@@ -319,10 +359,19 @@ export function SalePage({ workspace, categoryLookup, onOpenPhoto, onItemsChange
     if (!window.confirm(question)) {
       return
     }
+    const paidWithSquare = Boolean(order.square_payment_id) && order.square_status === 'completed'
+    const refund =
+      paidWithSquare &&
+      window.confirm(
+        `Also refund ${formatMoney(order.total)} in Square?
+
+OK = refund the customer's card and void.
+Cancel = void only (refund it in Square yourself).`,
+      )
     setSubmitting(true)
     setError(null)
     try {
-      const voided = await voidSaleOrder(saleId, order.id)
+      const voided = refund ? await refundAndVoidOrder(saleId, order.id) : await voidSaleOrder(saleId, order.id)
       setOrders((current) => (current ?? []).map((entry) => (entry.id === voided.id ? voided : entry)))
       void reloadOrders()
       if (restoreCart) {
@@ -492,6 +541,9 @@ export function SalePage({ workspace, categoryLookup, onOpenPhoto, onItemsChange
                 <p>
                   {units(completed.order.item_count)} · {paymentLabel(completed.order.payment_method)}
                 </p>
+                {completed.squarePaymentId ? (
+                  <p className="square-paid">Paid with Square · payment {lastFour(completed.squarePaymentId)}</p>
+                ) : null}
                 {completed.change !== null && completed.change > 0 ? (
                   <p className="checkout-change">Change due {formatMoney(completed.change)}</p>
                 ) : null}
@@ -801,7 +853,11 @@ export function SalePage({ workspace, categoryLookup, onOpenPhoto, onItemsChange
                     disabled={submitting || problems > 0 || priced.totalTooHigh}
                     onClick={() => void completeSale()}
                   >
-                    {submitting ? 'Completing…' : `Complete sale · ${formatMoney(priced.total)}`}
+                    {submitting
+                      ? 'Completing…'
+                      : paymentMethod === 'square'
+                        ? `Charge ${formatMoney(priced.total)} with Square`
+                        : `Complete sale · ${formatMoney(priced.total)}`}
                   </button>
                 ) : null}
               </>
@@ -853,7 +909,14 @@ export function SalePage({ workspace, categoryLookup, onOpenPhoto, onItemsChange
                   </span>
                   <span className="recent-sale-money">
                     {order.voided ? <s>{formatMoney(order.total)}</s> : formatMoney(order.total)}
-                    <small>{order.voided ? 'Voided' : paymentLabel(order.payment_method)}</small>
+                    <small>
+                      {order.voided ? 'Voided' : paymentLabel(order.payment_method)}
+                      {order.square_payment_id ? (
+                        <span className="square-badge" title={`Square payment ${order.square_payment_id}`}>
+                          {order.square_status === 'refunded' ? 'refunded' : `paid ${lastFour(order.square_payment_id)}`}
+                        </span>
+                      ) : null}
+                    </small>
                   </span>
                 </button>
                 {open ? (
@@ -905,6 +968,22 @@ export function SalePage({ workspace, categoryLookup, onOpenPhoto, onItemsChange
           </div>
         ) : null}
       </section>
+      {squareOpen ? (
+        <SquareChargeSheet
+          saleId={saleId}
+          total={priced.total}
+          itemCount={itemCount}
+          buildPayload={buildPayload}
+          resume={squareResume}
+          onCompleted={finishSquareSale}
+          onUnavailable={squareUnavailable}
+          onClose={() => {
+            setSquareOpen(false)
+            setSquareResume(null)
+            void Promise.all([onItemsChanged(), reloadOrders()])
+          }}
+        />
+      ) : null}
     </>
   )
 }

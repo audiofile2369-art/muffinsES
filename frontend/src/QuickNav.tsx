@@ -106,7 +106,7 @@ export function QuickNav({ view, section, saleId, saleTitle, onNavigate, onAddIt
   const hasSale = saleId !== null && saleTitle !== null
   const saleActive = view === 'checkout'
   const itemsActive = view === 'sales' && section === 'items'
-  const setupActive = view === 'sales' && section !== 'items'
+  const setupActive = (view === 'sales' && section !== 'items') || view === 'square'
 
   function go(route: AppRoute): void {
     setMoreOpen(false)
@@ -125,6 +125,24 @@ export function QuickNav({ view, section, saleId, saleTitle, onNavigate, onAddIt
   const visibleSetup = setupEntries.filter((entry) => hasSale || entry.section === null)
 
   function setupLinks(role?: 'menuitem') {
+    const squareActive = view === 'square'
+    return [
+      ...setupEntryLinks(role),
+      <button
+        type="button"
+        role={role}
+        key="square"
+        className={`nav-link ${squareActive ? 'active' : ''}`}
+        {...current(squareActive)}
+        onClick={() => go({ view: 'square' })}
+      >
+        {icons.details}
+        <span>Square payments</span>
+      </button>,
+    ]
+  }
+
+  function setupEntryLinks(role?: 'menuitem') {
     return visibleSetup.map((entry) => {
       const active = view === 'sales' && section === entry.section
       return (

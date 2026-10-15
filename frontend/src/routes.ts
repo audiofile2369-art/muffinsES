@@ -3,7 +3,7 @@
  * estate sale (its inventory and, further down, its setup sections), `items`
  * every item across all estate sales.
  */
-export type AppView = 'checkout' | 'sales' | 'items'
+export type AppView = 'checkout' | 'sales' | 'items' | 'square'
 export type SaleSection = 'items' | 'tasks' | 'details' | 'categories'
 
 export interface AppRoute {
@@ -27,13 +27,16 @@ function validId(value: string | undefined): number | null {
 }
 
 /**
- * Read a route from the URL hash: #/items, #/checkout/3, #/sales, #/sale/3 or #/sale/3/tasks.
+ * Read a route from the URL hash: #/items, #/square (Square payments setup), #/checkout/3, #/sales, #/sale/3 or #/sale/3/tasks.
  * The old Sale day address (#/sale/3/sale-day) opens the Sale page.
  */
 export function parseRouteHash(hash: string): AppRoute {
   const parts = hash.replace(/^#\/?/, '').split('/').filter(Boolean)
   if (parts[0] === 'items') {
     return { view: 'items' }
+  }
+  if (parts[0] === 'square') {
+    return { view: 'square' }
   }
   if (parts[0] === 'checkout') {
     return { view: 'checkout', saleId: validId(parts[1]) }
@@ -56,6 +59,9 @@ export function parseRouteHash(hash: string): AppRoute {
 export function buildRouteHash(route: AppRoute): string {
   if (route.view === 'items') {
     return '#/items'
+  }
+  if (route.view === 'square') {
+    return '#/square'
   }
   if (route.view === 'checkout') {
     return route.saleId == null ? '#/checkout' : `#/checkout/${route.saleId}`

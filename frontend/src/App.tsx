@@ -37,6 +37,7 @@ import { useSellFlow } from './useSellFlow'
 import { ToastHost } from './ToastHost'
 import { flushToast, showToast } from './toast'
 import { buildRouteHash, parseRouteHash } from './routes'
+import { SquareSettings } from './square/SquareSettings'
 import type { AppRoute, AppView, SaleSection } from './routes'
 import { stepPhotoViewer } from './photoViewer'
 import type { PhotoViewerState } from './photoViewer'
@@ -1787,6 +1788,8 @@ function App() {
           />
         )
       ) : null}
+
+      {view === 'square' ? <SquareSettings /> : null}
 
       {view === 'items' ? (
         <AllItemsView

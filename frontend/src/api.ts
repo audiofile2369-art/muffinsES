@@ -86,7 +86,7 @@ function extractErrorMessage(rawMessage: string, status: number): string {
   return trimmedMessage
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (API_BASE_URL === null) {
     throw new Error('API base URL is not configured.')
   }

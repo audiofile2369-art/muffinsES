@@ -129,6 +129,9 @@ export interface OrderRead {
   voided_at: string | null
   voided: boolean
   lines: OrderLine[]
+  /** Set when the sale was paid through Square. */
+  square_payment_id?: string | null
+  square_status?: string | null
 }
 
 /** A cart line the server could not sell (409 from checkout). */
