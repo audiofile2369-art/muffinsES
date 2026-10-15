@@ -200,3 +200,69 @@ class CustomerOrder(SQLModel, table=True):
         nullable=False,
     )
     voided_at: datetime | None = Field(default=None, sa_type=DateTime(timezone=True), nullable=True)
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+class SquarePayment(SQLModel, table=True):
+    """One attempt to take a customer's payment through Square (a "pending Square sale").
+
+    The cart (`cart_json`, a CheckoutRequest without the payment method) waits
+    here until Square confirms the money; only then is the `customer_order`
+    created, through the same checkout code as any other sale, and `order_id`
+    set. Nothing is marked sold for a payment that fails or is canceled.
+
+    `kind` is how the money is taken: `terminal` (a Square Terminal device),
+    `pos_app` (the Square Point of Sale app on this phone or tablet) or
+    `payment_link` (a Square-hosted checkout page / QR). `square_checkout_id` is
+    the Terminal checkout id or the payment link id. `status` is one of
+    pending, completed, canceled, failed, refunded, or conflict (Square took the
+    money but the items had been sold on another device meanwhile; refund it).
+    A new table: `create_all` adds it without touching existing rows.
+    """
+
+    __tablename__ = "square_payment"
+
+    id: int | None = Field(default=None, primary_key=True)
+    sale_id: int = Field(index=True)
+    order_id: int | None = Field(default=None, index=True)
+    kind: str = Field(max_length=20)
+    status: str = Field(default="pending", max_length=20, index=True)
+    amount_cents: int = Field(ge=0)
+    currency: str = Field(default="USD", max_length=3)
+    cart_json: str = Field(default="{}")
+    client_key: str = Field(max_length=64, unique=True)
+    idempotency_key: str = Field(max_length=64)
+    square_checkout_id: str | None = Field(default=None, max_length=255)
+    square_order_id: str | None = Field(default=None, max_length=255)
+    square_payment_id: str | None = Field(default=None, max_length=255)
+    square_refund_id: str | None = Field(default=None, max_length=255)
+    device_id: str | None = Field(default=None, max_length=255)
+    link_url: str | None = Field(default=None, max_length=1000)
+    raw_last_status: str = Field(default="", max_length=60)
+    message: str = Field(default="", max_length=1000)
+    created_at: datetime = Field(default_factory=_utcnow, sa_type=DateTime(timezone=True), nullable=False)
+    updated_at: datetime = Field(default_factory=_utcnow, sa_type=DateTime(timezone=True), nullable=False)
+
+
+class SquareDevice(SQLModel, table=True):
+    """A Square Terminal paired with this app (or a pairing code still waiting to be typed in).
+
+    `device_id` is None until the cashier enters `code` on the Terminal and
+    Square reports the code as PAIRED.
+    """
+
+    __tablename__ = "square_device"
+
+    id: int | None = Field(default=None, primary_key=True)
+    name: str = Field(max_length=80)
+    device_id: str | None = Field(default=None, max_length=255, index=True)
+    device_code_id: str | None = Field(default=None, max_length=255)
+    code: str | None = Field(default=None, max_length=20)
+    code_status: str = Field(default="UNPAIRED", max_length=20)
+    pair_by: str | None = Field(default=None, max_length=40)
+    location_id: str | None = Field(default=None, max_length=255)
+    created_at: datetime = Field(default_factory=_utcnow, sa_type=DateTime(timezone=True), nullable=False)
+    last_used_at: datetime | None = Field(default=None, sa_type=DateTime(timezone=True), nullable=True)

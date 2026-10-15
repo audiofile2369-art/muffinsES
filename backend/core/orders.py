@@ -16,7 +16,7 @@ from sqlalchemy import delete, update
 from sqlmodel import Session, select
 
 from backend.core.checkout import CheckoutError, from_cents, price_order
-from backend.core.models import CustomerOrder, Item, ItemSaleEvent, ItemStatus
+from backend.core.models import CustomerOrder, Item, ItemSaleEvent, ItemStatus, SquarePayment
 from backend.core.schemas import CheckoutRequest, CheckoutUnavailable, OrderLineRead, OrderRead
 from backend.core.selling import as_utc, load_sale_events, recorded_units, remaining_units
 
@@ -255,6 +255,11 @@ def build_order_reads(session: Session, orders: list[CustomerOrder]) -> list[Ord
         for event in session.exec(select(ItemSaleEvent).where(ItemSaleEvent.order_id.in_(order_ids))).all():
             if event.id is not None:
                 live[event.id] = event
+    square: dict[int, SquarePayment] = {}
+    if order_ids:
+        for payment in session.exec(select(SquarePayment).where(SquarePayment.order_id.in_(order_ids))).all():
+            if payment.order_id is not None:
+                square[payment.order_id] = payment
     reads: list[OrderRead] = []
     for order in orders:
         try:
@@ -283,6 +288,8 @@ def build_order_reads(session: Session, orders: list[CustomerOrder]) -> list[Ord
                 voided_at=as_utc(order.voided_at),
                 voided=order.voided_at is not None,
                 lines=lines,
+                square_payment_id=square[order.id].square_payment_id if order.id in square else None,
+                square_status=square[order.id].status if order.id in square else None,
             )
         )
     return reads

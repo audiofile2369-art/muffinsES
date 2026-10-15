@@ -7,3 +7,5 @@ frontend/dist/
 frontend/.vite/
 neon_db.txt
 open api.txt
+square token.txt
+.env

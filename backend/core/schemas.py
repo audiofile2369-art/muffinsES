@@ -244,6 +244,9 @@ class OrderRead(SQLModel):
     voided_at: datetime | None = None
     voided: bool = False
     lines: list[OrderLineRead] = Field(default_factory=list)
+    # Set when the sale was paid through Square (see backend/core/square.py).
+    square_payment_id: str | None = None
+    square_status: str | None = None
 
 
 class CheckoutUnavailable(SQLModel):

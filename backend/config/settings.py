@@ -24,6 +24,7 @@ class Settings:
     api_prefix: str
     frontend_origins: tuple[str, ...]
     app_name: str
+    square_token_path: Path
 
 
 DEPLOYMENT_DATABASE_URL_ENV_VARS = (
@@ -80,6 +81,7 @@ def get_settings() -> Settings:
         api_prefix="/api",
         frontend_origins=("http://127.0.0.1:5173", "http://localhost:5173"),
         app_name="MuffinES",
+        square_token_path=project_root / "square token.txt",
     )
 
 

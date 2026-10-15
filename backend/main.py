@@ -39,6 +39,7 @@ from backend.core.orders import (
     void_order,
 )
 from backend.core.selling import load_sale_events, sold_fields
+from backend.core.square import router as square_router
 from backend.core.pricing import (
     PricingConfigurationError,
     PricingEstimateService,
@@ -103,6 +104,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.include_router(square_router)
 
 
 def _parse_category_names(raw_value: str) -> list[str]:
